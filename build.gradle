@@ -64,8 +64,7 @@ test {
 
 shadowJar {
     archiveClassifier.set('')
-    relocate 'com.zaxxer.hikari', 'br.com.pedrodalben.easyvip.libs.hikari'
-    relocate 'com.mysql', 'br.com.pedrodalben.easyvip.libs.mysql'
 }
+
 
 build.dependsOn shadowJar

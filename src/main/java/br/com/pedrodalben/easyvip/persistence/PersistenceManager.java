@@ -39,6 +39,10 @@ public final class PersistenceManager {
     private PersistenceManager() {
     }
 
+    public static boolean isSqlMode() {
+        return sqlMode;
+    }
+
     public static void initialize(Path dir) {
         dataDir = dir.resolve("data");
 
