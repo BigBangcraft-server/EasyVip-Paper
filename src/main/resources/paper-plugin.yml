@@ -1,0 +1,22 @@
+name: EasyVip
+version: '${version}'
+main: br.com.pedrodalben.easyvip.paper.EasyVipPaperPlugin
+api-version: '1.21'
+author: pedro-dalben
+description: Modern VIP, key, reward, and package management plugin for Paper
+folia-supported: true
+permissions:
+  easyvip.use:
+    description: Allows player to use EasyVip commands
+    default: true
+  easyvip.admin:
+    description: Allows administrator EasyVip commands
+    default: op
+dependencies:
+  server:
+    LuckPerms:
+      load: BEFORE
+      required: false
+    Vault:
+      load: BEFORE
+      required: false

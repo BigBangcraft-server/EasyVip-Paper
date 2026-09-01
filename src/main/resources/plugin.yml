@@ -1,0 +1,37 @@
+name: EasyVip
+version: '${version}'
+main: br.com.pedrodalben.easyvip.paper.EasyVipPaperPlugin
+api-version: '1.21'
+author: pedro-dalben
+description: Modern VIP, key, reward, and package management plugin for Paper
+folia-supported: true
+softdepend:
+  - LuckPerms
+  - Vault
+commands:
+  easyvip:
+    description: Main EasyVip command
+    permission: easyvip.use
+    aliases: [evip]
+  usekey:
+    description: Redeem a VIP or reward key
+    permission: easyvip.use
+  activate:
+    description: Redeem a VIP or reward key
+    permission: easyvip.use
+  vip:
+    description: EasyVip key redemption or help
+    permission: easyvip.use
+  viptime:
+    description: Check VIP remaining time
+    permission: easyvip.use
+  link:
+    description: Link webstore account
+    permission: easyvip.use
+permissions:
+  easyvip.use:
+    description: Allows player to use EasyVip commands
+    default: true
+  easyvip.admin:
+    description: Allows administrator EasyVip commands
+    default: op
