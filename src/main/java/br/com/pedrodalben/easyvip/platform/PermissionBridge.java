@@ -55,8 +55,22 @@ public final class PermissionBridge {
 
         boolean bukkitAllowed = player.hasPermission(permission);
 
-        return luckPermsAllowed || bukkitAllowed;
+        return resolvePermission(luckPermsAllowed, luckPermsAllowed, bukkitAllowed, player.isOp());
     }
+
+    static boolean resolvePermission(boolean primaryAllowed, boolean fallbackLuckPermsAllowed, boolean fallbackBridgeAllowed, boolean opFallback) {
+        if (primaryAllowed) {
+            return true;
+        }
+        if (fallbackLuckPermsAllowed) {
+            return true;
+        }
+        if (fallbackBridgeAllowed) {
+            return true;
+        }
+        return opFallback;
+    }
+
 
     public static void setPermission(Player player, String permission, boolean value) {
         if (player != null && luckPermsPresent && EasyVipConfig.integrations.luckpermsEnabled) {

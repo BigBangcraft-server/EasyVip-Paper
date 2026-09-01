@@ -31,7 +31,13 @@ public final class ActionContext {
             throw new IllegalArgumentException("playerUuid cannot be null for offline ActionContext");
         }
         String resolvedName = (playerName != null && !playerName.isBlank()) ? playerName : playerUuid.toString();
-        Player online = Bukkit.getPlayer(playerUuid);
+        Player online = null;
+        try {
+            if (Bukkit.getServer() != null) {
+                online = Bukkit.getPlayer(playerUuid);
+            }
+        } catch (Throwable ignored) {
+        }
         return new ActionContext(online, playerUuid, resolvedName, source);
     }
 
@@ -40,7 +46,12 @@ public final class ActionContext {
             return player;
         }
         if (playerUuid != null) {
-            return Bukkit.getPlayer(playerUuid);
+            try {
+                if (Bukkit.getServer() != null) {
+                    return Bukkit.getPlayer(playerUuid);
+                }
+            } catch (Throwable ignored) {
+            }
         }
         return null;
     }

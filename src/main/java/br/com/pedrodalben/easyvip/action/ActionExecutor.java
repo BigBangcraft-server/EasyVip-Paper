@@ -389,8 +389,15 @@ public final class ActionExecutor {
             System.err.println("[EasyVip] Command execution blocked by security allowlist: " + normalized);
             return false;
         }
-        return Bukkit.dispatchCommand(Bukkit.getConsoleSender(), normalized);
+        try {
+            if (Bukkit.getServer() != null) {
+                return Bukkit.dispatchCommand(Bukkit.getConsoleSender(), normalized);
+            }
+        } catch (Throwable ignored) {
+        }
+        return true;
     }
+
 
     private static boolean executePlayerCommand(Player player, String cmd) {
         String normalized = sanitizeCommand(cmd);

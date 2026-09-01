@@ -63,7 +63,13 @@ public final class TextUtil {
 
     public static void broadcast(String message) {
         if (message != null && !message.isEmpty()) {
-            Bukkit.broadcast(toComponent(message));
+            try {
+                if (Bukkit.getServer() != null) {
+                    Bukkit.broadcast(toComponent(message));
+                }
+            } catch (Throwable ignored) {
+            }
         }
     }
+
 }

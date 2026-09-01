@@ -34,6 +34,26 @@ public final class VipService {
     private VipService() {
     }
 
+    public static Player getPlayerSafely(UUID uuid) {
+        if (uuid == null) return null;
+        try {
+            if (Bukkit.getServer() != null) {
+                return Bukkit.getPlayer(uuid);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static void fireEventSafely(org.bukkit.event.Event event) {
+        try {
+            if (Bukkit.getServer() != null && Bukkit.getPluginManager() != null) {
+                Bukkit.getPluginManager().callEvent(event);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static long parseDurationMillis(String durationStr) {
         return DurationParser.parseDurationMillis(durationStr);
     }
@@ -67,7 +87,7 @@ public final class VipService {
         long now = System.currentTimeMillis();
 
         PlayerVipRecord record = registry.getVips().get(tierId);
-        Player player = Bukkit.getPlayer(uuid);
+        Player player = getPlayerSafely(uuid);
         boolean isOnline = player != null && player.isOnline();
         String targetName = knownPlayerName != null ? knownPlayerName : resolvePlayerName(uuid);
         if (isOnline) {
@@ -172,10 +192,7 @@ public final class VipService {
 
         PersistenceManager.log(operator, "add_vip", "VIP tier " + tierId + " added to " + targetName + " with duration " + durationStr);
 
-        try {
-            Bukkit.getPluginManager().callEvent(new VipActivateEvent(uuid, targetName, tierId, duration, operator));
-        } catch (Throwable ignored) {
-        }
+        fireEventSafely(new VipActivateEvent(uuid, targetName, tierId, duration, operator));
 
         return true;
     }
@@ -438,7 +455,7 @@ public final class VipService {
             return false;
         }
 
-        Player player = Bukkit.getPlayer(uuid);
+        Player player = getPlayerSafely(uuid);
         EasyVipConfig.VipTierDefinition tierDef = EasyVipConfig.tiers.list.get(tierId);
 
         if (player != null && tierDef != null) {
@@ -471,10 +488,7 @@ public final class VipService {
         String targetName = (player != null) ? player.getName() : uuid.toString();
         PersistenceManager.log(operator, "remove_vip", "VIP tier " + tierId + " removed from " + targetName);
 
-        try {
-            Bukkit.getPluginManager().callEvent(new VipExpireEvent(uuid, targetName, tierId));
-        } catch (Throwable ignored) {
-        }
+        fireEventSafely(new VipExpireEvent(uuid, targetName, tierId));
 
         return true;
     }
@@ -494,7 +508,7 @@ public final class VipService {
             return false;
         }
 
-        Player player = Bukkit.getPlayer(uuid);
+        Player player = getPlayerSafely(uuid);
 
         for (PlayerVipRecord record : registry.getVips().values()) {
             if (record.isActive() && !record.getTierId().equals(tierId)) {
@@ -539,7 +553,8 @@ public final class VipService {
             return;
         }
 
-        Player player = Bukkit.getPlayer(uuid);
+        Player player = getPlayerSafely(uuid);
+
 
         PlayerVipRecord highestVip = null;
         int highestPriority = -1;
@@ -624,7 +639,7 @@ public final class VipService {
     }
 
     public static int expireDueVipsForPlayer(UUID uuid) {
-        return expireDueVipsForPlayer(uuid, resolvePlayerName(uuid), Bukkit.getPlayer(uuid));
+        return expireDueVipsForPlayer(uuid, resolvePlayerName(uuid), getPlayerSafely(uuid));
     }
 
     static int expireDueVipsForTest(UUID uuid, String playerName) {
@@ -668,10 +683,7 @@ public final class VipService {
 
                 PersistenceManager.log("System", "vip_expired", "VIP tier " + record.getTierId() + " expired for " + playerName);
 
-                try {
-                    Bukkit.getPluginManager().callEvent(new VipExpireEvent(uuid, playerName, record.getTierId()));
-                } catch (Throwable ignored) {
-                }
+                fireEventSafely(new VipExpireEvent(uuid, playerName, record.getTierId()));
             }
         }
 
@@ -724,13 +736,18 @@ public final class VipService {
     }
 
     public static String resolvePlayerName(UUID uuid) {
-        Player online = Bukkit.getPlayer(uuid);
+        Player online = getPlayerSafely(uuid);
         if (online != null) {
             return online.getName();
         }
-        OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
-        if (offline.getName() != null && !offline.getName().isBlank()) {
-            return offline.getName();
+        try {
+            if (Bukkit.getServer() != null) {
+                OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+                if (offline.getName() != null && !offline.getName().isBlank()) {
+                    return offline.getName();
+                }
+            }
+        } catch (Throwable ignored) {
         }
         PlayerVipRegistry registry = PersistenceManager.getPlayerVips(uuid);
         if (registry != null && registry.getPlayerName() != null && !registry.getPlayerName().isBlank()) {
@@ -738,6 +755,7 @@ public final class VipService {
         }
         return uuid.toString();
     }
+
 
     private static void executeSetActiveActions(UUID uuid, Player player, EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
         if (tierDef == null) return;
