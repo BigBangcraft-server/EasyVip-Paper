@@ -8,7 +8,7 @@ version = '1.2.0'
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
@@ -29,18 +29,18 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT'
+    compileOnly 'io.papermc.paper:paper-api:26.2.build.121-stable'
     compileOnly 'net.luckperms:api:5.4'
     compileOnly 'com.github.MilkBowl:VaultAPI:1.7.1'
 
     implementation 'com.zaxxer:HikariCP:5.1.0'
     implementation 'com.mysql:mysql-connector-j:8.3.0'
 
-    testImplementation 'io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT'
+    testImplementation 'io.papermc.paper:paper-api:26.2.build.121-stable'
     testImplementation 'net.luckperms:api:5.4'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
-    testImplementation 'org.mockito:mockito-core:5.11.0'
-    testImplementation 'org.mockito:mockito-junit-jupiter:5.11.0'
+    testImplementation 'org.mockito:mockito-core:5.23.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.23.0'
     testImplementation 'com.h2database:h2:2.2.224'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

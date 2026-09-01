@@ -1,6 +1,6 @@
 # EasyVip (Paper Edition)
 
-Modern, enterprise-grade VIP, Key, Reward, and Package management plugin built for **Paper / Purpur / Folia 1.21.4** (Java 21).
+Modern, enterprise-grade VIP, Key, Reward, and Package management plugin built for **Paper / Purpur / Folia 26.2** (Java 25).
 
 Fully backported from the EasyVip mod with 100% feature parity, zero mod dependencies, high performance, atomic persistence, and robust integrations.
 
@@ -110,7 +110,7 @@ All configuration files are located under `plugins/EasyVip/`:
 ## 🔨 Building
 
 Requirements:
-- Java 21 JDK
+- Java 25 JDK
 - Gradle 8+ or bundled Gradle wrapper
 
 ```bash

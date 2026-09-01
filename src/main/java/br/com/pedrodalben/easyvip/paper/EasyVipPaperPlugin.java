@@ -34,7 +34,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         getLogger().info("=========================================");
         getLogger().info(" EasyVip - Modern VIP & Key Management  ");
         getLogger().info(" Version: " + getDescription().getVersion());
-        getLogger().info(" Platform: Paper 1.21.4 (Java 21)");
+        getLogger().info(" Platform: Paper 26.2 (Java 25)");
         getLogger().info("=========================================");
 
         Path dataDir = getDataFolder().toPath();

@@ -1,7 +1,7 @@
 name: EasyVip
 version: '${version}'
 main: br.com.pedrodalben.easyvip.paper.EasyVipPaperPlugin
-api-version: '1.21'
+api-version: '26.2'
 author: pedro-dalben
 description: Modern VIP, key, reward, and package management plugin for Paper
 folia-supported: true
