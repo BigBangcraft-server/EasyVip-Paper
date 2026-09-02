@@ -6,6 +6,7 @@ import br.com.pedrodalben.easyvip.platform.PermissionBridge;
 import br.com.pedrodalben.easyvip.platform.PlatformBridge;
 import br.com.pedrodalben.easyvip.platform.TextUtil;
 import br.com.pedrodalben.easyvip.service.PackageService;
+import br.com.pedrodalben.easyvip.service.VipService;
 import br.com.pedrodalben.easyvip.util.CommandAllowlist;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -13,6 +14,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scoreboard.Scoreboard;
@@ -20,6 +22,8 @@ import org.bukkit.scoreboard.Team;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class ActionExecutor {
 
@@ -63,6 +67,43 @@ public final class ActionExecutor {
             }
         }
         return allOk;
+    }
+
+    /** Executes a package/action chain without making nested package claims synchronous. */
+    public static CompletionStage<Boolean> executeAsync(Plugin plugin, Player player,
+                                                          List<Map<String, Object>> actions,
+                                                          Map<String, String> context) {
+        if (plugin == null || player == null) {
+            return CompletableFuture.completedFuture(execute(player, actions, context));
+        }
+        if (actions == null || actions.isEmpty()) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return executeAsyncAt(plugin, player, actions, context, 0, true);
+    }
+
+    private static CompletionStage<Boolean> executeAsyncAt(Plugin plugin, Player player,
+                                                            List<Map<String, Object>> actions,
+                                                            Map<String, String> context, int index,
+                                                            boolean allOk) {
+        if (index >= actions.size()) {
+            return CompletableFuture.completedFuture(allOk);
+        }
+        Map<String, Object> action = actions.get(index);
+        String type = getString(action, "type", "");
+        CompletionStage<Boolean> step;
+        if ("give_package".equalsIgnoreCase(type)) {
+            String packageId = getString(action, "package_id", "");
+            step = packageId.isEmpty()
+                    ? CompletableFuture.completedFuture(false)
+                    : PackageService.givePackageAsync(plugin, player, packageId);
+        } else {
+            step = VipService.runOnServerAsync(plugin, player,
+                    () -> execute(player, List.of(action), context));
+        }
+        return step.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
+                .thenCompose(success -> executeAsyncAt(plugin, player, actions, context,
+                        index + 1, allOk && success));
     }
 
     private static boolean executeSingle(ActionContext ctx, Map<String, Object> action, Map<String, String> context) {

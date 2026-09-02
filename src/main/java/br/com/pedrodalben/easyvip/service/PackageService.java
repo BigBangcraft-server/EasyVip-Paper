@@ -288,8 +288,7 @@ public final class PackageService {
 
         CompletionStage<Boolean> effect = claim.delivery() != null && claim.delivery().delivered()
                 ? CompletableFuture.completedFuture(true)
-                : VipService.runOnServerAsync(plugin, player,
-                () -> ActionExecutor.execute(player, claim.definition().actions, context));
+                : ActionExecutor.executeAsync(plugin, player, claim.definition().actions, context);
         return effect.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
                 .thenCompose(success -> PersistenceManager.executeAsync(() -> finalizePackageClaim(claim, success)))
                 .thenCompose(success -> VipService.runOnServerAsync(plugin, player, () -> {
@@ -565,11 +564,12 @@ public final class PackageService {
         context.put("package", claim.definition().displayName);
         context.put("package_id", claim.definition().id);
         context.put("variant", claim.variantName());
+        List<Map<String, Object>> actions = claim.definition().actions == null
+                ? new ArrayList<>() : new ArrayList<>(claim.definition().actions);
+        actions.addAll(claim.actions());
         CompletionStage<Boolean> effect = claim.delivery() != null && claim.delivery().delivered()
                 ? CompletableFuture.completedFuture(true)
-                : VipService.runOnServerAsync(plugin, player, () ->
-                ActionExecutor.execute(player, claim.definition().actions, context)
-                        && ActionExecutor.execute(player, claim.actions(), context));
+                : ActionExecutor.executeAsync(plugin, player, actions, context);
         return effect.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
                 .thenCompose(success -> PersistenceManager.executeAsync(() -> finalizeVariantClaim(claim, success)))
                 .thenCompose(success -> VipService.runOnServerAsync(plugin, player, () -> {
