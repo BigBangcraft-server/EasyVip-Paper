@@ -17,6 +17,7 @@ import com.google.gson.JsonParser;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -903,8 +904,11 @@ public final class WebStoreFulfillmentService {
                 .method(method.toUpperCase(Locale.ROOT), HttpRequest.BodyPublishers.ofByteArray(body))
                 .build();
 
-        HttpResponse<byte[]> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofByteArray());
-        byte[] responseBody = response.body() != null ? response.body() : new byte[0];
+        HttpResponse<InputStream> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        byte[] responseBody;
+        try (InputStream responseStream = response.body()) {
+            responseBody = responseStream == null ? new byte[0] : responseStream.readNBytes(MAX_RESPONSE_BYTES + 1);
+        }
         if (responseBody.length > MAX_RESPONSE_BYTES) {
             return SignedResponse.failure(response.statusCode(), new byte[0]);
         }
@@ -914,7 +918,7 @@ public final class WebStoreFulfillmentService {
         return SignedResponse.success(response.statusCode(), responseBody);
     }
 
-    private static boolean validateResponseSignature(HttpResponse<byte[]> response, byte[] body, String nonce, String secret) {
+    private static boolean validateResponseSignature(HttpResponse<?> response, byte[] body, String nonce, String secret) {
         String tsHeader = response.headers().firstValue("X-EasyVip-Response-Timestamp").orElse(null);
         String sigHeader = response.headers().firstValue("X-EasyVip-Response-Signature").orElse(null);
         if (tsHeader == null || sigHeader == null || !sigHeader.startsWith(RESPONSE_SIGNATURE_PREFIX)) {

@@ -4,6 +4,7 @@ import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -28,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class WebStoreSyncService {
 
+    static final int MAX_RESPONSE_BYTES = 256 * 1024;
     private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -124,7 +126,11 @@ public final class WebStoreSyncService {
                         .POST(HttpRequest.BodyPublishers.ofString(json))
                         .build();
 
-                HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<InputStream> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                byte[] responseBody;
+                try (InputStream body = response.body()) {
+                    responseBody = readBoundedResponse(body);
+                }
                 int status = response.statusCode();
 
                 switch (status) {
@@ -140,9 +146,10 @@ public final class WebStoreSyncService {
                         return status;
 
                     case 422:
-                        log("SYNC_422 | " + username + " | " + uuid + " | response_sha256=" + bodyDigest(response.body()));
+                        String digest = bodyDigest(responseBody);
+                        log("SYNC_422 | " + username + " | " + uuid + " | response_sha256=" + digest);
                         PersistenceManager.log("WebStore", "sync_422",
-                                "Player " + username + " (" + uuid + "): response_sha256=" + bodyDigest(response.body()));
+                                "Player " + username + " (" + uuid + "): response_sha256=" + digest);
                         return status;
 
                     case 500:
@@ -242,7 +249,11 @@ public final class WebStoreSyncService {
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build();
 
-        HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<InputStream> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        byte[] responseBody;
+        try (InputStream body = response.body()) {
+            responseBody = readBoundedResponse(body);
+        }
         int status = response.statusCode();
 
         if (status == 201) {
@@ -254,9 +265,10 @@ public final class WebStoreSyncService {
             PersistenceManager.log("WebStore", "challenge_401",
                     "Challenge 401 for " + uuid);
         } else {
-            log("CHALLENGE_ERR | " + uuid + " | HTTP " + status + " | response_sha256=" + bodyDigest(response.body()));
+            String digest = bodyDigest(responseBody);
+            log("CHALLENGE_ERR | " + uuid + " | HTTP " + status + " | response_sha256=" + digest);
             PersistenceManager.log("WebStore", "challenge_error",
-                    "Challenge HTTP " + status + " for " + uuid + ": response_sha256=" + bodyDigest(response.body()));
+                    "Challenge HTTP " + status + " for " + uuid + ": response_sha256=" + digest);
         }
     }
 
@@ -270,8 +282,21 @@ public final class WebStoreSyncService {
         }
     }
 
-    private static String bodyDigest(String body) {
-        return sha256(body == null ? "" : body);
+    private static String bodyDigest(byte[] body) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(body == null ? new byte[0] : body));
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+
+    static byte[] readBoundedResponse(InputStream body) throws IOException {
+        byte[] response = body.readNBytes(MAX_RESPONSE_BYTES + 1);
+        if (response.length > MAX_RESPONSE_BYTES) {
+            throw new IOException("WebStore response exceeded configured limit");
+        }
+        return response;
     }
 
     private static synchronized void log(String message) {

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -65,6 +67,15 @@ class WebStoreSyncServiceTest {
         String payload = invokeBuildSyncPayload(UUID.fromString("e309ad92-e421-420a-8bf3-3df86db3e660"), "PedropsRei", null);
         assertTrue(payload.contains("\"server_id\": \"fallback-server\""));
         assertFalse(payload.contains("ip_address"));
+    }
+
+    @Test
+    void webstoreResponsesAreBoundedBeforeAllocationCanGrow() throws Exception {
+        byte[] oversized = new byte[WebStoreSyncService.MAX_RESPONSE_BYTES + 1];
+        assertThrows(IOException.class, () -> WebStoreSyncService.readBoundedResponse(
+                new ByteArrayInputStream(oversized)));
+        byte[] accepted = "ok".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertArrayEquals(accepted, WebStoreSyncService.readBoundedResponse(new ByteArrayInputStream(accepted)));
     }
 
     private static String invokeBuildSyncPayload(UUID uuid, String username, String ipAddress) throws Exception {

@@ -13,6 +13,8 @@
 * WebStore fulfillment validates HMAC responses with constant-time comparison,
   nonce binding, timestamp tolerance, bounded response size, server identity, and
   exact JSON fields. Remote WebStore URLs must use HTTPS.
+* WebStore player/challenge responses are streamed through a 256 KiB cap before
+  any body digesting, so a remote endpoint cannot grow the sync worker heap.
 * Console/player commands are normalized and checked by the configured allowlist;
   failed dispatch now returns failure instead of granting success.
 * WebStore/SQL failures log stable exception classes or digests rather than raw
