@@ -27,10 +27,11 @@ alternate source of truth.
 ## Test evidence
 
 `SqlConcurrencyTest` runs two-thread races over separate pooled connections
-and asserts one winner for key usage, package claims, and expiration, plus a
-stale-snapshot CAS failure. It also checks duplicate idempotency, transaction
-rollback, legacy migration verification, and pool restart/reconnect. The suite
-passes on H2 and was executed successfully against MySQL 8.4 and MariaDB 11.4.
+and asserts one winner for key usage, package claims, expiration, and
+simultaneous VIP writers (the loser receives an explicit CAS conflict). It also
+checks duplicate idempotency, transaction rollback, legacy migration
+verification, and pool restart/reconnect. The suite passes on H2 and was
+executed successfully against MySQL 8.4 and MariaDB 11.4.
 Disposable restart labs for both engines also passed the suite before and
 after restart; production failover remains a deployment gate.
 

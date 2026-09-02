@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.time.Clock;
 import java.time.Instant;
@@ -128,6 +129,34 @@ class SqlConcurrencyTest {
 
         assertThrows(java.util.ConcurrentModificationException.class,
                 () -> SqlDatabaseManager.updatePlayerVips(player, stale));
+    }
+
+    @Test
+    void concurrentVipWritersExposeOneCasConflict() throws Exception {
+        UUID player = UUID.randomUUID();
+        PlayerVipRegistry initial = new PlayerVipRegistry(player);
+        initial.setPlayerName("Initial");
+        initial.getVips().put("vip", new PlayerVipRecord("vip", 10L, -1L, true, false));
+        SqlDatabaseManager.updatePlayerVips(player, initial);
+
+        PlayerVipRegistry nodeA = SqlDatabaseManager.getPlayerVips(player);
+        PlayerVipRegistry nodeB = SqlDatabaseManager.getPlayerVips(player);
+        nodeA.setPlayerName("NodeA");
+        nodeB.setPlayerName("NodeB");
+
+        List<Boolean> outcomes = race(2, (start, index) -> {
+            start.await();
+            try {
+                SqlDatabaseManager.updatePlayerVips(player, index == 0 ? nodeA : nodeB);
+                return true;
+            } catch (java.util.ConcurrentModificationException conflict) {
+                return false;
+            }
+        });
+
+        assertEquals(1, outcomes.stream().filter(Boolean::booleanValue).count());
+        assertEquals(1, outcomes.stream().filter(value -> !value).count());
+        assertTrue(Set.of("NodeA", "NodeB").contains(SqlDatabaseManager.getPlayerVips(player).getPlayerName()));
     }
 
     @Test
