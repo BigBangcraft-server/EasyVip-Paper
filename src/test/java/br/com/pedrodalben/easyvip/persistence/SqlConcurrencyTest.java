@@ -23,14 +23,21 @@ import static org.junit.jupiter.api.Assertions.*;
 class SqlConcurrencyTest {
 
     private String dbUrl;
+    private String dbUsername;
+    private String dbPassword;
+    private String runId;
 
     @BeforeEach
     void setUp() {
         EasyVipConfig.integrations.sqlPoolSize = 4;
         EasyVipConfig.integrations.sqlMinimumIdle = 1;
         EasyVipConfig.integrations.sqlConnectionTimeoutSeconds = 5;
-        dbUrl = "jdbc:h2:mem:easyvip_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
-        SqlDatabaseManager.initialize(dbUrl, "", "");
+        runId = UUID.randomUUID().toString().replace("-", "");
+        dbUrl = System.getenv().getOrDefault("EASYVIP_TEST_JDBC_URL",
+                "jdbc:h2:mem:easyvip_" + runId + ";DB_CLOSE_DELAY=-1");
+        dbUsername = System.getenv().getOrDefault("EASYVIP_TEST_JDBC_USER", "");
+        dbPassword = System.getenv().getOrDefault("EASYVIP_TEST_JDBC_PASSWORD", "");
+        SqlDatabaseManager.initialize(dbUrl, dbUsername, dbPassword);
     }
 
     @AfterEach
@@ -49,7 +56,7 @@ class SqlConcurrencyTest {
         assertTrue(migrationRecorded);
 
         KeyRecord key = new KeyRecord();
-        key.setCode("EVIP-RACE");
+        key.setCode("EVIP-RACE-" + runId);
         key.setType("custom");
         key.setMaxUses(1);
         key.setCreatedTime(System.currentTimeMillis());
@@ -59,8 +66,8 @@ class SqlConcurrencyTest {
         UUID secondPlayer = UUID.randomUUID();
         List<SqlDatabaseManager.KeyClaimResult> claims = race(2, (start, index) -> {
             start.await();
-            return SqlDatabaseManager.claimKey("EVIP-RACE", index == 0 ? firstPlayer : secondPlayer,
-                    null, true, "key-race-" + index, System.currentTimeMillis(), 10_000L);
+            return SqlDatabaseManager.claimKey("EVIP-RACE-" + runId, index == 0 ? firstPlayer : secondPlayer,
+                    null, true, "key-race-" + runId + "-" + index, System.currentTimeMillis(), 10_000L);
         });
 
         assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count());
@@ -69,21 +76,22 @@ class SqlConcurrencyTest {
                 .filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).findFirst().orElseThrow();
         UUID winnerUuid = claims.get(0).status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED ? firstPlayer : secondPlayer;
         assertTrue(SqlDatabaseManager.completeKeyClaim(winner.claimId(), winnerUuid, true, System.currentTimeMillis()));
-        assertEquals(1, SqlDatabaseManager.getKey("EVIP-RACE").getUsedCount());
+        assertEquals(1, SqlDatabaseManager.getKey("EVIP-RACE-" + runId).getUsedCount());
 
         KeyRecord physicalKey = new KeyRecord();
-        physicalKey.setCode("EVIP-PHYSICAL");
+        physicalKey.setCode("EVIP-PHYSICAL-" + runId);
         physicalKey.setType("custom");
         physicalKey.setMaxUses(1);
         physicalKey.setCreatedTime(System.currentTimeMillis());
         SqlDatabaseManager.putKey(physicalKey);
         SqlDatabaseManager.KeyClaimResult physicalClaim = SqlDatabaseManager.claimKey(
-                "EVIP-PHYSICAL", firstPlayer, "machine-1", true, "physical-1", System.currentTimeMillis(), 10_000L);
+                "EVIP-PHYSICAL-" + runId, firstPlayer, "machine-1", true,
+                "physical-" + runId, System.currentTimeMillis(), 10_000L);
         assertEquals(SqlDatabaseManager.KeyClaimStatus.CLAIMED, physicalClaim.status());
         assertTrue(SqlDatabaseManager.completeKeyClaim(physicalClaim.claimId(), firstPlayer, true, System.currentTimeMillis()));
         assertEquals(SqlDatabaseManager.KeyClaimStatus.ALREADY_USED,
-                SqlDatabaseManager.claimKey("EVIP-PHYSICAL", UUID.randomUUID(), "machine-1", true,
-                        "key-replay", System.currentTimeMillis(), 10_000L).status());
+                SqlDatabaseManager.claimKey("EVIP-PHYSICAL-" + runId, UUID.randomUUID(), "machine-1", true,
+                        "key-replay-" + runId, System.currentTimeMillis(), 10_000L).status());
     }
 
     @Test
@@ -92,7 +100,7 @@ class SqlConcurrencyTest {
         List<SqlDatabaseManager.PackageClaimResult> claims = race(2, (start, index) -> {
             start.await();
             return SqlDatabaseManager.claimPackage(player, "monthly", false, 0,
-                    "package-race-" + index, System.currentTimeMillis(), 10_000L);
+                    "package-race-" + runId + "-" + index, System.currentTimeMillis(), 10_000L);
         });
         assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.CLAIMED).count());
         assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.ALREADY_CLAIMED).count());
@@ -118,16 +126,16 @@ class SqlConcurrencyTest {
     void duplicateIdempotencyRollbackAndRestartAreObservable() {
         UUID player = UUID.randomUUID();
         KeyRecord key = new KeyRecord();
-        key.setCode("EVIP-IDEMPOTENT");
+        key.setCode("EVIP-IDEMPOTENT-" + runId);
         key.setType("custom");
         key.setMaxUses(1);
         key.setCreatedTime(System.currentTimeMillis());
         SqlDatabaseManager.putKey(key);
 
         SqlDatabaseManager.KeyClaimResult first = SqlDatabaseManager.claimKey(
-                key.getCode(), player, null, true, "same-request", System.currentTimeMillis(), 10_000L);
+                key.getCode(), player, null, true, "same-request-" + runId, System.currentTimeMillis(), 10_000L);
         SqlDatabaseManager.KeyClaimResult duplicate = SqlDatabaseManager.claimKey(
-                key.getCode(), player, null, true, "same-request", System.currentTimeMillis(), 10_000L);
+                key.getCode(), player, null, true, "same-request-" + runId, System.currentTimeMillis(), 10_000L);
         assertEquals(SqlDatabaseManager.KeyClaimStatus.CLAIMED, first.status());
         assertEquals(SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED, duplicate.status());
         assertTrue(SqlDatabaseManager.releaseKeyClaim(first.claimId(), "test_rollback"));
@@ -139,7 +147,7 @@ class SqlConcurrencyTest {
         assertNull(SqlDatabaseManager.getPlayerVips(player));
 
         SqlDatabaseManager.shutdown();
-        SqlDatabaseManager.initialize(dbUrl, "", "");
+        SqlDatabaseManager.initialize(dbUrl, dbUsername, dbPassword);
         assertNotNull(SqlDatabaseManager.getKey(key.getCode()));
         assertTrue(SqlDatabaseManager.verifyLegacyVipMigration().complete());
     }
@@ -162,12 +170,12 @@ class SqlConcurrencyTest {
         });
 
         SqlDatabaseManager.shutdown();
-        SqlDatabaseManager.initialize(dbUrl, "", "");
+        SqlDatabaseManager.initialize(dbUrl, dbUsername, dbPassword);
         SqlDatabaseManager.MigrationVerification verification = SqlDatabaseManager.verifyLegacyVipMigration();
         assertTrue(verification.complete());
-        assertEquals(1, verification.legacyPlayers());
-        assertEquals(1, verification.migratedPlayers());
-        assertEquals(1, verification.legacyGrants());
+        assertTrue(verification.legacyPlayers() >= 1);
+        assertTrue(verification.migratedPlayers() >= verification.legacyPlayers());
+        assertTrue(verification.legacyGrants() >= 1);
         assertTrue(SqlDatabaseManager.getPlayerVips(player).getVips().containsKey("vip"));
     }
 

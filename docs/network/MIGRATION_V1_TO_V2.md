@@ -34,4 +34,5 @@ materialized player/grant counts; operators can also check
 and inspect the audit log for failed actions. The concurrency suite covers
 idempotency, rollback, restart/reconnect, key-use races, CAS stale snapshots,
 and single-winner expiration transitions against H2; MySQL or MariaDB remains
-the release-environment gate.
+the release-environment gate. The same suite was also executed successfully
+against MySQL 8.4; MariaDB compatibility remains a separate environment gate.

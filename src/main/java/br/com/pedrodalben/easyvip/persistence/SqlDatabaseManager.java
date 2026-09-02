@@ -151,7 +151,7 @@ public final class SqlDatabaseManager {
                     version BIGINT NOT NULL DEFAULT 0
                 )
             """);
-            stmt.execute("CREATE INDEX IF NOT EXISTS ix_easyvip_entitlement_player ON easyvip_entitlement_grants (player_uuid)");
+            ensureIndex(conn, "easyvip_entitlement_grants", "ix_easyvip_entitlement_player", "player_uuid");
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS easyvip_player_preferences (
                     player_uuid VARCHAR(36) PRIMARY KEY,
@@ -176,7 +176,7 @@ public final class SqlDatabaseManager {
                     UNIQUE (code, physical_instance_id)
                 )
             """);
-            stmt.execute("CREATE INDEX IF NOT EXISTS ix_easyvip_key_redemptions_code ON easyvip_key_redemptions (code, status)");
+            ensureIndex(conn, "easyvip_key_redemptions", "ix_easyvip_key_redemptions_code", "code, status");
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS easyvip_package_claims (
                     claim_id VARCHAR(36) PRIMARY KEY,
@@ -193,7 +193,7 @@ public final class SqlDatabaseManager {
                     UNIQUE (idempotency_key)
                 )
             """);
-            stmt.execute("CREATE INDEX IF NOT EXISTS ix_easyvip_package_claims_lookup ON easyvip_package_claims (player_uuid, package_id, status, claimed_at)");
+            ensureIndex(conn, "easyvip_package_claims", "ix_easyvip_package_claims_lookup", "player_uuid, package_id, status, claimed_at");
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS easyvip_deliveries (
                     delivery_id VARCHAR(36) PRIMARY KEY,
@@ -426,6 +426,22 @@ public final class SqlDatabaseManager {
     private static long count(Connection conn, String sql) throws SQLException {
         try (Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
             return rs.next() ? rs.getLong(1) : 0;
+        }
+    }
+
+    private static void ensureIndex(Connection conn, String table, String indexName, String columns) {
+        try (ResultSet indexes = conn.getMetaData().getIndexInfo(null, null, table, false, false)) {
+            while (indexes.next()) {
+                String existing = indexes.getString("INDEX_NAME");
+                if (existing != null && existing.equalsIgnoreCase(indexName)) return;
+            }
+            try (Statement create = conn.createStatement()) {
+                create.execute("CREATE INDEX " + indexName + " ON " + table + " (" + columns + ")");
+            }
+        } catch (SQLException e) {
+            if (!isDuplicateKeyError(e)) {
+                System.err.println("[EasyVip-SQL] Failed to ensure index " + table + "." + indexName + ": " + e.getMessage());
+            }
         }
     }
 
@@ -1013,7 +1029,9 @@ public final class SqlDatabaseManager {
         }
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);
-            RedemptionRow existing = findRedemption(conn, idempotencyKey, true);
+            // Do not take a gap lock for an absent idempotency key; the unique
+            // constraint is the winner election and avoids cross-node deadlocks.
+            RedemptionRow existing = findRedemption(conn, idempotencyKey, false);
             if (existing != null) {
                 KeyRecord existingKey = getKey(conn, existing.code());
                 conn.commit();
@@ -1101,6 +1119,9 @@ public final class SqlDatabaseManager {
                 } catch (SQLException ignored) {
                 }
             }
+            System.err.println("[EasyVip-SQL] claimKey failed for "
+                    + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code)
+                    + " state=" + e.getSQLState() + ": " + e.getMessage());
             return new KeyClaimResult(KeyClaimStatus.ERROR, null, null);
         }
     }
@@ -1200,13 +1221,16 @@ public final class SqlDatabaseManager {
 
     private static long activeKeyClaims(Connection conn, String code, long now) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("""
-                SELECT COUNT(*) FROM easyvip_key_redemptions
+                SELECT redemption_id FROM easyvip_key_redemptions
                 WHERE code = ? AND status = 'CLAIMED' AND lease_expires_at >= ?
+                FOR UPDATE
                 """)) {
             ps.setString(1, code);
             ps.setLong(2, now);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
+                long count = 0;
+                while (rs.next()) count++;
+                return count;
             }
         }
     }
@@ -1445,7 +1469,9 @@ public final class SqlDatabaseManager {
         String claimKey = repeatable ? idempotencyKey : "once:" + playerUuid + ":" + packageId;
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);
-            PackageClaimRow existing = findPackageClaim(conn, claimKey, true);
+            // An absent unique key cannot be locked; let the unique constraint
+            // arbitrate concurrent inserts after the cooldown read.
+            PackageClaimRow existing = findPackageClaim(conn, claimKey, false);
             if (existing != null && "COMPLETE".equals(existing.status())) {
                 conn.commit();
                 return new PackageClaimResult(PackageClaimStatus.ALREADY_CLAIMED, existing.claimId());
@@ -1505,6 +1531,8 @@ public final class SqlDatabaseManager {
                     return new PackageClaimResult(PackageClaimStatus.ERROR, null);
                 }
             }
+            System.err.println("[EasyVip-SQL] claimPackage failed for " + packageId
+                    + " state=" + e.getSQLState() + ": " + e.getMessage());
             return new PackageClaimResult(PackageClaimStatus.ERROR, null);
         }
     }

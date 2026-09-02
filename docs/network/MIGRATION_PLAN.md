@@ -20,8 +20,8 @@ network foundation one bounded goal at a time.
 3. Added legacy-to-V2 materialization and V2-first reads with legacy mirroring.
 4. Replaced SQL read/modify/write races with transactions, unique keys,
    compare-and-set, leases, and atomic expiration transitions.
-5. Added pooled-connection concurrency tests; H2 is supplemental and the
-   MySQL/MariaDB lab remains a release gate.
+5. Added pooled-connection concurrency tests; H2 and MySQL 8.4 are covered,
+   while the MariaDB lab remains a compatibility gate.
 
 ## GOAL 03 — entitlement engine
 

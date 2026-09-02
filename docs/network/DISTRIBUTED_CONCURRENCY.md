@@ -29,6 +29,11 @@ alternate source of truth.
 `SqlConcurrencyTest` runs two-thread races over separate pooled connections
 and asserts one winner for key usage, package claims, and expiration, plus a
 stale-snapshot CAS failure. It also checks duplicate idempotency, transaction
-rollback, legacy migration verification, and pool restart/reconnect. H2 is a
-fast supplemental lab; release acceptance still requires the same suite
-against the supported MySQL/MariaDB versions.
+rollback, legacy migration verification, and pool restart/reconnect. The suite
+passes on H2 and was executed successfully against MySQL 8.4; MariaDB remains
+an additional compatibility gate.
+
+To point the same test at a real database, set `EASYVIP_TEST_JDBC_URL`,
+`EASYVIP_TEST_JDBC_USER`, and `EASYVIP_TEST_JDBC_PASSWORD` before running the
+Gradle test. Credentials are read only from the process environment and are
+never logged by the test.
