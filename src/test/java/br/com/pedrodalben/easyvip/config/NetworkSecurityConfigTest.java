@@ -72,6 +72,30 @@ class NetworkSecurityConfigTest {
     }
 
     @Test
+    void sqlTlsValidationCannotBeSatisfiedByAnotherParameterOrAnOverriddenValue() {
+        EasyVipConfig.integrations.sqlEnabled = true;
+        EasyVipConfig.integrations.sqlUrl =
+                "jdbc:mysql://db.example:3306/easyvip?note=sslMode=VERIFY_IDENTITY&sslMode=DISABLED";
+        EasyVipConfig.network.environment = "production";
+
+        List<String> errors = EasyVipConfig.validate();
+
+        assertTrue(errors.stream().anyMatch(error -> error.contains("sslMode=VERIFY_IDENTITY")));
+    }
+
+    @Test
+    void sqlTlsValidationAcceptsTheEffectiveIdentityMode() {
+        EasyVipConfig.integrations.sqlEnabled = true;
+        EasyVipConfig.integrations.sqlUrl =
+                "jdbc:mysql://db.example:3306/easyvip?sslMode=VERIFY_IDENTITY&connectTimeout=5";
+        EasyVipConfig.network.environment = "production";
+
+        List<String> errors = EasyVipConfig.validate();
+
+        assertTrue(errors.stream().noneMatch(error -> error.contains("sslMode=VERIFY_IDENTITY")));
+    }
+
+    @Test
     void environmentCredentialsTakePrecedenceWithoutLoggingValues() {
         assertEquals("environment-secret", EasyVipConfig.resolveEnvironmentValue(
                 "EASYVIP_SQL_PASSWORD", "inline-secret",

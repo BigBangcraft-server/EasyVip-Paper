@@ -1629,7 +1629,18 @@ public final class EasyVipConfig {
     }
 
     private static boolean hasVerifyIdentitySslMode(String jdbcUrl) {
-        return jdbcUrl != null && jdbcUrl.toLowerCase(Locale.ROOT).contains("sslmode=verify_identity");
+        if (jdbcUrl == null) return false;
+        int queryStart = jdbcUrl.indexOf('?');
+        if (queryStart < 0) return false;
+        boolean found = false;
+        boolean verified = false;
+        for (String parameter : jdbcUrl.substring(queryStart + 1).split("[&;]")) {
+            int separator = parameter.indexOf('=');
+            if (separator <= 0 || !"sslmode".equalsIgnoreCase(parameter.substring(0, separator).trim())) continue;
+            found = true;
+            verified = "verify_identity".equalsIgnoreCase(parameter.substring(separator + 1).trim());
+        }
+        return found && verified;
     }
 
     private static String resolveEnvironmentValue(String envName, String configured) {
