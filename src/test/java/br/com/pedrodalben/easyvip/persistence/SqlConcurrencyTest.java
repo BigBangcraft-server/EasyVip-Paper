@@ -131,6 +131,23 @@ class SqlConcurrencyTest {
     }
 
     @Test
+    void sqlRoundTripKeepsNonActiveEntitlements() {
+        UUID player = UUID.randomUUID();
+        PlayerVipRegistry registry = new PlayerVipRegistry(player);
+        registry.setPlayerName("Multiple");
+        registry.getVips().put("diamond", new PlayerVipRecord("diamond", 1L, -1L, true, false));
+        registry.getVips().put("gold", new PlayerVipRecord("gold", 2L, -1L, false, false));
+
+        SqlDatabaseManager.updatePlayerVips(player, registry);
+
+        PlayerVipRegistry loaded = SqlDatabaseManager.getPlayerVips(player);
+        assertNotNull(loaded);
+        assertEquals(2, loaded.getVips().size());
+        assertTrue(loaded.getVips().get("diamond").isActive());
+        assertFalse(loaded.getVips().get("gold").isActive());
+    }
+
+    @Test
     void duplicateIdempotencyRollbackAndRestartAreObservable() {
         UUID player = UUID.randomUUID();
         KeyRecord key = new KeyRecord();

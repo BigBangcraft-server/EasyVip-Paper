@@ -749,7 +749,7 @@ public final class SqlDatabaseManager {
         registry.setVersion(version);
         try (PreparedStatement ps = conn.prepareStatement("""
                 SELECT entitlement_id, starts_at, expires_at, active, pending_activate
-                FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active' AND active = TRUE
+                FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active'
                 """)) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
