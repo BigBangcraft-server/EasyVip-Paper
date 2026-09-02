@@ -45,8 +45,9 @@ public final class SqlDatabaseManager {
             config.setLeakDetectionThreshold(EasyVipConfig.integrations.sqlLeakDetectionThresholdSeconds * 1000L);
         }
         config.setPoolName("EasyVip-SQL");
-        config.addDataSourceProperty("useSSL", "false");
-        config.addDataSourceProperty("allowPublicKeyRetrieval", "true");
+        // Do not downgrade transport security. Connector/J uses the JDBC URL's
+        // sslMode (or its secure default); deployments needing strict identity
+        // verification must set sslMode=VERIFY_IDENTITY in that URL.
         dataSource = new HikariDataSource(config);
         try {
             createTables();
@@ -79,6 +80,46 @@ public final class SqlDatabaseManager {
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Health check failed: " + e.getMessage());
             return false;
+        }
+    }
+
+    /** Pool and authoritative-ledger counters for asynchronous operator diagnostics. */
+    public record HealthSnapshot(boolean initialized, boolean healthy, int active, int idle,
+                                 int total, int waiting, long claimedDeliveries,
+                                 long deliveredDeliveries, long failedDeliveries) {
+    }
+
+    public static HealthSnapshot healthSnapshot() {
+        HikariDataSource pool = dataSource;
+        if (pool == null || pool.isClosed()) {
+            return new HealthSnapshot(false, false, 0, 0, 0, 0, 0L, 0L, 0L);
+        }
+        var mxBean = pool.getHikariPoolMXBean();
+        int active = mxBean == null ? 0 : mxBean.getActiveConnections();
+        int idle = mxBean == null ? 0 : mxBean.getIdleConnections();
+        int total = mxBean == null ? 0 : mxBean.getTotalConnections();
+        int waiting = mxBean == null ? 0 : mxBean.getThreadsAwaitingConnection();
+        long claimed = 0L;
+        long delivered = 0L;
+        long failed = 0L;
+        try (Connection conn = pool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT status, COUNT(*) FROM easyvip_deliveries GROUP BY status");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                long count = rs.getLong(2);
+                switch (rs.getString(1)) {
+                    case "CLAIMED" -> claimed += count;
+                    case "DELIVERED" -> delivered += count;
+                    case "FAILED" -> failed += count;
+                    default -> { }
+                }
+            }
+            return new HealthSnapshot(true, conn.isValid(2), active, idle, total, waiting,
+                    claimed, delivered, failed);
+        } catch (SQLException e) {
+            return new HealthSnapshot(true, false, active, idle, total, waiting,
+                    claimed, delivered, failed);
         }
     }
 
@@ -765,7 +806,10 @@ public final class SqlDatabaseManager {
             ps.setString(3, record.getTierId());
             ps.setLong(4, record.getStartTime());
             ps.setLong(5, record.getExpiryTime());
-            ps.setString(6, record.isExpired() ? "expired" : "active");
+            // Keep the row active until the expiry worker wins the atomic
+            // transition; otherwise an expired snapshot becomes invisible
+            // to every worker and its once-only effects are lost.
+            ps.setString(6, "active");
             ps.setBoolean(7, record.isActive());
             ps.setBoolean(8, record.isPendingActivateActions());
             ps.setLong(9, now);

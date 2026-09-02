@@ -239,6 +239,17 @@ class SqlConcurrencyTest {
         assertEquals(DeliveryStatus.ERROR, ledger.claim(mismatch, "node-c", 1_000L, afterLease).status());
     }
 
+    @Test
+    void healthSnapshotExposesPoolAndDeliveryCountersWithoutCredentials() {
+        SqlDatabaseManager.HealthSnapshot snapshot = SqlDatabaseManager.healthSnapshot();
+
+        assertTrue(snapshot.initialized());
+        assertTrue(snapshot.healthy());
+        assertTrue(snapshot.total() >= 1);
+        assertTrue(snapshot.active() >= 0);
+        assertTrue(snapshot.waiting() >= 0);
+    }
+
     private static <T> List<T> race(int workers, RaceTask<T> task) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(workers);
         CountDownLatch start = new CountDownLatch(1);

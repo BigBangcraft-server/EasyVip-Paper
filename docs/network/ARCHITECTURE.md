@@ -88,6 +88,23 @@ deferred until the contracts have independent consumers and migration tests.
 
 ## Target state
 
+```mermaid
+flowchart LR
+    API[EasyVip API/Core] --> SQL[(MySQL/MariaDB authority)]
+    API --> CACHE[Bounded local cache]
+    PAPER[Paper/Folia 26.2 adapter] --> API
+    VELOCITY[Velocity adapter] --> API
+    WEB[WebStore adapter] --> SQL
+    PAPER -. invalidation .-> REDIS[(Redis optional transport)]
+    VELOCITY -. invalidation .-> REDIS
+    REDIS -. events/heartbeats .-> CACHE
+    SQL --> LEDGER[Claims and delivery ledger]
+    LEDGER --> EFFECTS[External effects: commands/items/economy]
+```
+
+Redis distributes hints and visibility only; every entitlement, claim, and
+delivery decision is made against durable SQL state.
+
 * `easyvip-api` owns the public interfaces and immutable value types.
 * `easyvip-core` owns entitlement/benefit decisions and domain events without
   Bukkit, Paper, Velocity, SQL, or Redis imports.

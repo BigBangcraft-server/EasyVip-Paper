@@ -1472,6 +1472,10 @@ public final class EasyVipConfig {
                 if (!("redis".equalsIgnoreCase(redisUri.getScheme()) || "rediss".equalsIgnoreCase(redisUri.getScheme()))
                         || redisUri.getHost() == null || redisUri.getHost().isBlank()) {
                     errors.add("network.toml: redis_uri must be a redis:// or rediss:// URI with a host.");
+                } else if ("production".equalsIgnoreCase(network.environment)
+                        && "redis".equalsIgnoreCase(redisUri.getScheme())
+                        && !isLoopback(redisUri.getHost())) {
+                    errors.add("network.toml: production Redis must use rediss:// unless it is loopback.");
                 }
             } catch (IllegalArgumentException exception) {
                 errors.add("network.toml: redis_uri is invalid.");
@@ -1486,6 +1490,20 @@ public final class EasyVipConfig {
         if (network.cacheTtlSeconds < 1) errors.add("network.toml: cache_ttl_seconds must be positive.");
         if (network.heartbeatIntervalSeconds < 5) errors.add("network.toml: heartbeat_interval_seconds must be at least 5.");
         if (network.tags.stream().anyMatch(tag -> tag == null || tag.isBlank())) errors.add("network.toml: tags cannot contain blank values.");
+        if (webstore.enabled || fulfillment.enabled) {
+            try {
+                URI webstoreUri = URI.create(webstore.apiUrl);
+                String scheme = webstoreUri.getScheme();
+                String host = webstoreUri.getHost();
+                boolean localHttp = "http".equalsIgnoreCase(scheme) && isLoopback(host);
+                boolean remoteHttps = "https".equalsIgnoreCase(scheme) && host != null && !host.isBlank();
+                if (!localHttp && !remoteHttps) {
+                    errors.add("webstore.toml: api_url must use https:// outside loopback hosts.");
+                }
+            } catch (IllegalArgumentException exception) {
+                errors.add("webstore.toml: api_url is invalid.");
+            }
+        }
         for (PackageDefinition pkg : packages.list.values()) {
             if (pkg.id == null || pkg.id.trim().isEmpty()) {
                 errors.add(localized(
@@ -1533,6 +1551,18 @@ public final class EasyVipConfig {
                         "webstore.toml: fulfillment.poll_interval_seconds deve ser no mínimo 5."
                 ));
             }
+            if (fulfillment.requestTimeoutSeconds < 1 || fulfillment.requestTimeoutSeconds > 120) {
+                errors.add(localized(
+                        "webstore.toml: fulfillment.request_timeout_seconds must be between 1 and 120.",
+                        "webstore.toml: fulfillment.request_timeout_seconds deve ficar entre 1 e 120."
+                ));
+            }
+            if (fulfillment.timestampToleranceSeconds < 1 || fulfillment.timestampToleranceSeconds > 900) {
+                errors.add(localized(
+                        "webstore.toml: fulfillment.timestamp_tolerance_seconds must be between 1 and 900.",
+                        "webstore.toml: fulfillment.timestamp_tolerance_seconds deve ficar entre 1 e 900."
+                ));
+            }
             if (fulfillment.claimLimit < 1 || fulfillment.claimLimit > 100) {
                 errors.add(localized(
                         "webstore.toml: fulfillment.claim_limit must be between 1 and 100.",
@@ -1550,6 +1580,11 @@ public final class EasyVipConfig {
             }
         }
         return errors;
+    }
+
+    private static boolean isLoopback(String host) {
+        return host != null && ("localhost".equalsIgnoreCase(host)
+                || "127.0.0.1".equals(host) || "::1".equals(host));
     }
 
     private static boolean validBenefitValue(String type, Object value) {

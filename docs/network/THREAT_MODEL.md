@@ -1,4 +1,4 @@
-# Threat Model — GOAL 05 Boundary
+# Threat Model — GOAL 06 Boundary
 
 This is the foundation audit, not a production-readiness claim. Threats whose
 controls belong to GOAL 06 remain explicitly open.
@@ -37,12 +37,14 @@ controls belong to GOAL 06 remain explicitly open.
 * JSON mode still has mutable blob/read-modify-write paths; SQL mode uses the
   normalized V2 tables and CAS/claim transactions.
 * Existing Bukkit events are local process events, not durable network events.
-* Expiration is scheduled independently on each node; V2 elects one database
-  transition winner before local actions.
+* Expiration is scheduled independently on each node; the SQL delivery ledger
+  leases the external effect before V2 elects the database transition winner.
 * Static bridges and global configuration increase test isolation and lifecycle
   coupling.
 * Redis payloads are untrusted transport data; Pub/Sub can duplicate, delay,
   reorder, or disappear during an outage.
+* Legacy synchronous admin mutations can still occupy a server thread during
+  SQL latency; full async command composition remains open.
 
 ## Required mitigations before network use
 
@@ -52,8 +54,7 @@ controls belong to GOAL 06 remain explicitly open.
 * explicit node/proxy trust configuration and secret redaction;
 * outage tests proving fail-closed entitlement decisions and SQL authority.
 
-GOAL 05 keeps SQL as the authority. Redis payloads are bounded, versioned,
-deduplicated, and used only for invalidation/visibility; Redis outage falls
-back to SQL plus TTL. Delivery leases/idempotency and the namespaced
-LuckPerms projection are added, while production failover, live proxy trust,
-and full operational audit remain GOAL 06 work.
+GOAL 06 adds TLS-safe defaults/validation, bounded WebStore responses,
+fail-closed command dispatch, asynchronous diagnostics, and durable expiry
+effect claims. Production failover, live proxy trust, and full operational
+audit remain unproven until the live test gates are executed.

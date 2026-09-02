@@ -3,6 +3,10 @@ package br.com.pedrodalben.easyvip.service;
 import br.com.pedrodalben.easyvip.action.ActionContext;
 import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
+import br.com.pedrodalben.easyvip.delivery.DeliveryClaim;
+import br.com.pedrodalben.easyvip.delivery.DeliveryLedger;
+import br.com.pedrodalben.easyvip.delivery.DeliveryPolicy;
+import br.com.pedrodalben.easyvip.delivery.DeliveryRequest;
 import br.com.pedrodalben.easyvip.event.VipActivateEvent;
 import br.com.pedrodalben.easyvip.event.VipExpireEvent;
 import br.com.pedrodalben.easyvip.model.*;
@@ -31,6 +35,7 @@ import java.util.regex.Pattern;
 public final class VipService {
 
     private static final Pattern SCRIPT_VARIABLE_ASSIGNMENT = Pattern.compile("^\\$([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.+)$");
+    private static final DeliveryLedger DELIVERY_LEDGER = DeliveryLedger.sql();
 
     private VipService() {
     }
@@ -232,23 +237,25 @@ public final class VipService {
         }
     }
 
-    private static void executeVipExpireFlow(UUID uuid, Player player, String playerName,
-                                             EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
+    private static boolean executeVipExpireFlow(UUID uuid, Player player, String playerName,
+                                                EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
         if (tierDef == null) {
-            return;
+            return true;
         }
 
+        boolean ok = true;
         if (tierDef.actionsOnExpire != null && !tierDef.actionsOnExpire.isEmpty()) {
-            executeTierActions(uuid, playerName, player, tierDef.actionsOnExpire, ctx, source + "_legacy");
+            ok &= executeTierActions(uuid, playerName, player, tierDef.actionsOnExpire, ctx, source + "_legacy");
         }
 
         if (tierDef.commands != null && tierDef.commands.expire != null && !tierDef.commands.expire.isEmpty()) {
-            executeServerCommandList(uuid, player, playerName, tierDef.commands.expire, ctx, source + "_commands");
+            ok &= executeServerCommandList(uuid, player, playerName, tierDef.commands.expire, ctx, source + "_commands");
         }
 
         if (player != null && tierDef.messages != null && tierDef.messages.expired != null && !tierDef.messages.expired.isEmpty()) {
             TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + tierDef.messages.expired, ctx));
         }
+        return ok;
     }
 
     public static void executeActivationItems(Player player, EasyVipConfig.VipTierDefinition tierDef,
@@ -366,13 +373,14 @@ public final class VipService {
         return Enchantment.getByKey(key);
     }
 
-    private static void executeServerCommandList(UUID uuid, Player player, String playerName,
-                                                 List<String> commands, Map<String, String> ctx, String source) {
+    private static boolean executeServerCommandList(UUID uuid, Player player, String playerName,
+                                                    List<String> commands, Map<String, String> ctx, String source) {
         if (commands == null || commands.isEmpty()) {
-            return;
+            return true;
         }
 
         Map<String, String> scriptContext = new HashMap<>(ctx);
+        boolean ok = true;
         for (String command : commands) {
             if (command == null || command.trim().isEmpty()) {
                 continue;
@@ -390,8 +398,9 @@ public final class VipService {
             Map<String, Object> action = new LinkedHashMap<>();
             action.put("type", "run_server_command");
             action.put("command", ActionExecutor.resolvePlaceholders(command, scriptContext));
-            executeTierActions(uuid, playerName, player, List.of(action), scriptContext, source);
+            ok &= executeTierActions(uuid, playerName, player, List.of(action), scriptContext, source);
         }
+        return ok;
     }
 
     private static String formatChance(double chance) {
@@ -662,13 +671,15 @@ public final class VipService {
             Map.Entry<String, PlayerVipRecord> entry = it.next();
             PlayerVipRecord record = entry.getValue();
             if (record.isExpired()) {
-                if (PersistenceManager.isSqlMode()
-                        && !SqlDatabaseManager.transitionEntitlementExpired(uuid, record.getTierId(), record.getStartTime(), System.currentTimeMillis())) {
-                    continue;
+                DeliveryClaim delivery = null;
+                boolean alreadyDelivered = false;
+                if (PersistenceManager.isSqlMode()) {
+                    delivery = claimExpirationDelivery(uuid, record);
+                    alreadyDelivered = delivery.delivered();
+                    if (!alreadyDelivered && !delivery.acquired()) {
+                        continue;
+                    }
                 }
-                it.remove();
-                changed = true;
-                expiredCount++;
 
                 EasyVipConfig.VipTierDefinition tierDef = EasyVipConfig.tiers.list.get(record.getTierId());
                 Map<String, String> ctx = new HashMap<>();
@@ -677,14 +688,34 @@ public final class VipService {
                 ctx.put("player", playerName);
                 ctx.put("player_uuid", uuid.toString());
 
-                if (tierDef != null) {
+                boolean actionsOk = true;
+                if (!alreadyDelivered && tierDef != null) {
                     long originalDuration = record.getExpiryTime() == -1 ? -1 : (record.getExpiryTime() - record.getStartTime());
                     enrichVipContext(ctx, uuid, playerName, tierDef, originalDuration, record.getStartTime(), record.getExpiryTime());
                     if (record.isActive()) {
-                        executeUnsetActiveActions(uuid, player, record.getTierId(), tierDef, ctx, "vip_expire_unset_active");
+                        actionsOk &= executeUnsetActiveActions(uuid, player, record.getTierId(), tierDef, ctx, "vip_expire_unset_active");
                     }
-                    executeVipExpireFlow(uuid, player, playerName, tierDef, ctx, "vip_expire");
+                    actionsOk &= executeVipExpireFlow(uuid, player, playerName, tierDef, ctx, "vip_expire");
                 }
+                if (PersistenceManager.isSqlMode()) {
+                    if (!actionsOk) {
+                        DELIVERY_LEDGER.fail(delivery.deliveryId(), uuid, EasyVipConfig.network.nodeId,
+                                "action_failed", java.time.Clock.systemUTC());
+                        continue;
+                    }
+                    if (!alreadyDelivered && !DELIVERY_LEDGER.complete(delivery.deliveryId(), uuid,
+                            EasyVipConfig.network.nodeId, java.time.Clock.systemUTC())) {
+                        continue;
+                    }
+                    if (!SqlDatabaseManager.transitionEntitlementExpired(uuid, record.getTierId(),
+                            record.getStartTime(), System.currentTimeMillis())) {
+                        continue;
+                    }
+                }
+
+                it.remove();
+                changed = true;
+                expiredCount++;
 
                 PersistenceManager.log("System", "vip_expired", "VIP tier " + record.getTierId() + " expired for " + playerName);
 
@@ -762,8 +793,8 @@ public final class VipService {
     }
 
 
-    private static void executeSetActiveActions(UUID uuid, Player player, EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
-        if (tierDef == null) return;
+    private static boolean executeSetActiveActions(UUID uuid, Player player, EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
+        if (tierDef == null) return true;
         List<Map<String, Object>> actions = new ArrayList<>();
         if (tierDef.actionsOnSetActive != null) {
             actions.addAll(tierDef.actionsOnSetActive);
@@ -780,10 +811,10 @@ public final class VipService {
             lpAction.put("group", tierDef.id);
             actions.add(lpAction);
         }
-        executeTierActions(uuid, ctx.getOrDefault("player", resolvePlayerName(uuid)), player, actions, ctx, source);
+        return executeTierActions(uuid, ctx.getOrDefault("player", resolvePlayerName(uuid)), player, actions, ctx, source);
     }
 
-    private static void executeUnsetActiveActions(UUID uuid, Player player, String tierId, EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
+    private static boolean executeUnsetActiveActions(UUID uuid, Player player, String tierId, EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx, String source) {
         List<Map<String, Object>> actions = new ArrayList<>();
         if (tierDef != null && tierDef.actionsOnUnsetActive != null) {
             actions.addAll(tierDef.actionsOnUnsetActive);
@@ -800,7 +831,15 @@ public final class VipService {
             lpAction.put("group", tierId);
             actions.add(lpAction);
         }
-        executeTierActions(uuid, ctx.getOrDefault("player", resolvePlayerName(uuid)), player, actions, ctx, source);
+        return executeTierActions(uuid, ctx.getOrDefault("player", resolvePlayerName(uuid)), player, actions, ctx, source);
+    }
+
+    private static DeliveryClaim claimExpirationDelivery(UUID uuid, PlayerVipRecord record) {
+        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + record.getTierId() + ":" + record.getStartTime())
+                .getBytes(StandardCharsets.UTF_8)).toString();
+        DeliveryRequest request = new DeliveryRequest(uuid, grantId, "vip-expiration:" + record.getTierId(),
+                "NETWORK", "network", "vip-expiration:" + grantId, DeliveryPolicy.ONCE_PER_GRANT);
+        return DELIVERY_LEDGER.claim(request, EasyVipConfig.network.nodeId, 60_000L, java.time.Clock.systemUTC());
     }
 
     private static boolean executeTierActions(UUID uuid, String playerName, Player onlinePlayer,

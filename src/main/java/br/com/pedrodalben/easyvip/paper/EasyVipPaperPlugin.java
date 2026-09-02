@@ -15,6 +15,7 @@ import br.com.pedrodalben.easyvip.redis.RedisEventBus;
 import br.com.pedrodalben.easyvip.redis.RedisNodeRegistry;
 import br.com.pedrodalben.easyvip.redis.VersionAwareEventProcessor;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
+import br.com.pedrodalben.easyvip.persistence.SqlDatabaseManager;
 import br.com.pedrodalben.easyvip.platform.PaperPlatformBridge;
 import br.com.pedrodalben.easyvip.platform.PermissionBridge;
 import br.com.pedrodalben.easyvip.platform.TextUtil;
@@ -29,8 +30,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -42,11 +45,47 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
     private CachedEntitlementApi cachedEntitlementApi;
     private EntitlementCache entitlementCache;
     private RedisEventBus redisEventBus;
+    private RedisNodeRegistry networkNodes;
     private ScheduledExecutorService networkScheduler;
     private ExecutorService entitlementExecutor;
 
     public static EasyVipPaperPlugin getInstance() {
         return instance;
+    }
+
+    /** Runs health and delivery inspection off the server thread and never includes secrets. */
+    public CompletionStage<String> networkStatusAsync() {
+        ExecutorService executor = entitlementExecutor;
+        if (executor == null) {
+            return CompletableFuture.completedFuture("state=unavailable");
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            var sql = SqlDatabaseManager.healthSnapshot();
+            String sqlState = !EasyVipConfig.integrations.sqlEnabled ? "disabled"
+                    : (sql.healthy() ? "healthy" : "unhealthy");
+            String redisState = redisEventBus == null ? "disabled"
+                    : (redisEventBus.isRunning() ? "running" : "stopped");
+            String cacheState = entitlementCache == null ? "disabled"
+                    : "entries=" + entitlementCache.estimatedSize()
+                    + ",hits=" + entitlementCache.stats().hitCount()
+                    + ",misses=" + entitlementCache.stats().missCount();
+            var metrics = redisEventBus == null ? null : redisEventBus.metrics().snapshot();
+            String redisMetrics = metrics == null ? "n/a"
+                    : "published=" + metrics.published() + ",received=" + metrics.received()
+                    + ",invalid=" + metrics.invalidEvents() + ",ignored=" + metrics.ignoredEvents();
+            return "node=" + EasyVipConfig.network.nodeId
+                    + " sql=" + sqlState
+                    + " pool=" + sql.active() + "/" + sql.total() + ",waiting=" + sql.waiting()
+                    + " deliveries=claimed:" + sql.claimedDeliveries()
+                    + ",delivered:" + sql.deliveredDeliveries()
+                    + ",failed:" + sql.failedDeliveries()
+                    + " redis=" + redisState + " (" + redisMetrics + ")"
+                    + " cache=" + cacheState;
+        }, executor);
+    }
+
+    public RedisNodeRegistry networkNodes() {
+        return networkNodes;
     }
 
     /** Platform entry point for other plugins; the API itself has no Paper dependency. */
@@ -96,7 +135,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         try {
             PersistenceManager.initialize(dataDir);
             getLogger().info("Persistence initialized in "
-                    + (PersistenceManager.isSqlMode() ? "SQL (" + EasyVipConfig.integrations.sqlUrl + ")" : "JSON") + " mode.");
+                    + (PersistenceManager.isSqlMode() ? "SQL" : "JSON") + " mode.");
         } catch (Exception e) {
             getLogger().severe("Failed to initialize EasyVip persistence manager: " + e.getMessage());
             e.printStackTrace();
@@ -128,10 +167,10 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
                         event -> cachedEntitlementApi.invalidate(event.aggregateId(), event.aggregateVersion()),
                         redisEventBus.metrics());
                 redisEventBus.start(processor::accept);
-                RedisNodeRegistry nodeRegistry = new RedisNodeRegistry(redisEventBus,
+                networkNodes = new RedisNodeRegistry(redisEventBus,
                         Duration.ofSeconds(Math.max(10, EasyVipConfig.network.heartbeatIntervalSeconds * 3L)));
                 networkScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory("EasyVip-Network"));
-                Runnable heartbeat = () -> nodeRegistry.heartbeat(networkNode, getDescription().getVersion(),
+                Runnable heartbeat = () -> networkNodes.heartbeat(networkNode, getDescription().getVersion(),
                         br.com.pedrodalben.easyvip.api.EasyVipApi.API_VERSION, Clock.systemUTC().instant());
                 heartbeat.run();
                 networkScheduler.scheduleAtFixedRate(heartbeat,
@@ -147,6 +186,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
                     redisEventBus.close();
                     redisEventBus = null;
                 }
+                networkNodes = null;
             }
         }
         getServer().getPluginManager().registerEvents(new NetworkEventListener(cachedEntitlementApi,
@@ -220,6 +260,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
             redisEventBus.close();
             redisEventBus = null;
         }
+        networkNodes = null;
         if (entitlementExecutor != null) {
             entitlementExecutor.shutdownNow();
             entitlementExecutor = null;

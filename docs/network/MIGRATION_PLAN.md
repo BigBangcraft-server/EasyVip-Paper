@@ -1,7 +1,9 @@
 # Migration Plan
 
 This plan keeps existing Paper 26.2 behavior available while extracting the
-network foundation one bounded goal at a time.
+network foundation one bounded goal at a time. GOAL 06 hardening is currently
+in progress; it must close its live outage and production evidence before a
+network-ready verdict.
 
 ## Completed in GOAL 01
 
@@ -48,13 +50,16 @@ network foundation one bounded goal at a time.
 
 ## GOAL 06 — hardening
 
-* Run threat-model, load, outage, and distributed race labs.
-* Add operational diagnostics, CI gates, migration verification, and final
-  deployment/troubleshooting documentation.
+Status: implementation in progress.
+
+* Added TLS-safe transport defaults/validation, bounded signed responses,
+  fail-closed command dispatch, durable expiry-effect claims, async diagnostics,
+  architecture/security tests, CI, and operations/deployment documentation.
+* Remaining: live MySQL/MariaDB and Redis failover labs, proxy/backend trust
+  review, performance measurements, and production loader smoke tests.
 
 ## Exit criteria for the next goal
 
-GOAL 05 is complete when the full Paper suite, ledger adversarial tests, and
-Velocity compilation/artifact gates are green. Do not call the network ready
-until GOAL 06 adds authoritative outage, security, operations, and production
-evidence across all acceptance criteria in the program brief.
+GOAL 06 is complete only after authoritative outage, security, operations, and
+production evidence covers the acceptance criteria in the program brief. The
+current implementation is not a network-ready verdict yet.

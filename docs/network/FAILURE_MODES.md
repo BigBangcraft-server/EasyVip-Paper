@@ -1,4 +1,4 @@
-# GOAL 04-05 failure modes
+# GOAL 04-06 failure modes
 
 | Failure | Behavior | Safety property |
 | --- | --- | --- |
@@ -14,16 +14,18 @@
 | Redis pool exhaustion | bounded wait fails the async operation | no blocked Minecraft main thread |
 | delivery duplicate request | SQL unique idempotency key returns existing state | one logical claim |
 | delivery lease expires | another node may reclaim and retry | crash recovery without a permanent lock |
+| expiration worker crashes | delivery lease remains retryable before SQL lifecycle transition | no lost once-only expiry action |
 | delivery side effect is non-transactional | retry is at-least-once and requires downstream idempotency | no false exactly-once claim |
 | LuckPerms unavailable | projection future fails; EasyVip state is unchanged | authority is not delegated |
 | Velocity SQL/Redis failure | command returns unavailable/failure message | no capability is granted on dependency failure |
+| remote Redis/WebStore uses plaintext transport | production config validation rejects it | credentials are not silently sent without TLS |
 
 Capability reads on a cold cache can use `playerAsync`; a caller must handle
 the failed future and choose its own fail-closed UI/gameplay behavior. No code
 grants a VIP because Redis, SQL, LuckPerms, or another dependency failed.
 
-GOAL 04-05 do not claim durable event replay or transactional execution of
-arbitrary console commands. Pub/Sub is suitable for low-latency invalidation,
-the SQL ledger provides idempotent leases, and SQL reads/TTL provide
-convergence. Streams/outbox and provider-specific effect reconciliation belong
-to later hardening while preserving SQL authority.
+The transport still does not claim durable event replay or transactional
+execution of arbitrary console commands. Pub/Sub is suitable for low-latency
+invalidation, the SQL ledger provides idempotent leases, and SQL reads/TTL
+provide convergence. Streams/outbox and provider-specific effect
+reconciliation remain follow-up work while preserving SQL authority.

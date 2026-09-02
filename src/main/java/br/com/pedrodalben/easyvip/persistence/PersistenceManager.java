@@ -19,11 +19,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public final class PersistenceManager {
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(r -> {
-        Thread thread = new Thread(r, "EasyVip-Persistence-Thread");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private static volatile ExecutorService executor = newExecutor();
 
     private static final ReentrantReadWriteLock LOCK = new ReentrantReadWriteLock();
     private static Path dataDir;
@@ -44,6 +40,9 @@ public final class PersistenceManager {
     }
 
     public static void initialize(Path dir) {
+        if (executor.isShutdown()) {
+            executor = newExecutor();
+        }
         dataDir = dir.resolve("data");
 
         if (EasyVipConfig.integrations.sqlEnabled) {
@@ -73,7 +72,7 @@ public final class PersistenceManager {
                 EasyVipConfig.integrations.sqlUsername,
                 EasyVipConfig.integrations.sqlPassword
             );
-            System.out.println("[EasyVip] SQL persistence reloaded: " + EasyVipConfig.integrations.sqlUrl);
+            System.out.println("[EasyVip] SQL persistence reloaded");
         } else if (sqlMode) {
             SqlDatabaseManager.shutdown();
             sqlMode = false;
@@ -100,23 +99,31 @@ public final class PersistenceManager {
         } finally {
             LOCK.writeLock().unlock();
         }
-        EXECUTOR.shutdown();
+        executor.shutdown();
         try {
-            if (!EXECUTOR.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                EXECUTOR.shutdownNow();
+            if (!executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                executor.shutdownNow();
             }
         } catch (InterruptedException e) {
-            EXECUTOR.shutdownNow();
+            executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
 
     public static void flush() {
         try {
-            EXECUTOR.submit(() -> { }).get();
+            executor.submit(() -> { }).get();
         } catch (Exception e) {
             throw new RuntimeException("Could not flush persistence executor", e);
         }
+    }
+
+    private static ExecutorService newExecutor() {
+        return Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "EasyVip-Persistence-Thread");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     // ─── Load Operations ────────────────────────────────────
@@ -240,23 +247,23 @@ public final class PersistenceManager {
 
     // ─── Save Trigger Helpers (Async) ───────────────────────
     public static void saveVips() {
-        EXECUTOR.submit(PersistenceManager::saveVipsSync);
+        executor.submit(PersistenceManager::saveVipsSync);
     }
 
     public static void saveKeys() {
-        EXECUTOR.submit(PersistenceManager::saveKeysSync);
+        executor.submit(PersistenceManager::saveKeysSync);
     }
 
     public static void savePendingVariants() {
-        EXECUTOR.submit(PersistenceManager::savePendingVariantsSync);
+        executor.submit(PersistenceManager::savePendingVariantsSync);
     }
 
     public static void savePackageUsage() {
-        EXECUTOR.submit(PersistenceManager::savePackageUsageSync);
+        executor.submit(PersistenceManager::savePackageUsageSync);
     }
 
     public static void saveAuditLogs() {
-        EXECUTOR.submit(PersistenceManager::saveAuditLogsSync);
+        executor.submit(PersistenceManager::saveAuditLogsSync);
     }
 
     // ─── Sync Atomic Save Operations ────────────────────────

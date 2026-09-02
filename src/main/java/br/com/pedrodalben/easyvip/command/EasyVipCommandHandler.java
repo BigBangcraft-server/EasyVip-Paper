@@ -199,6 +199,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         if (PermissionBridge.hasPermission(sender, "easyvip.admin")) {
             TextUtil.sendMessage(sender, "§7- §f/easyvip admin ... §8- §7" + EasyVipConfig.localized("administrative commands", "comandos administrativos"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip admin webstore status §8- §7" + EasyVipConfig.localized("fulfillment state", "estado do fulfillment"));
+            TextUtil.sendMessage(sender, "§7- §f/easyvip admin network status §8- §7" + EasyVipConfig.localized("DB/Redis/cache/delivery health", "saúde de DB/Redis/cache/delivery"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip createvip <id> <display_name> [color] §8- §7" + EasyVipConfig.localized("create a new VIP definition", "criar uma nova definição de VIP"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip key ... §8- §7" + EasyVipConfig.localized("manage keys", "gerenciar chaves"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip package ... §8- §7" + EasyVipConfig.localized("manage packages", "gerenciar pacotes"));
@@ -803,13 +804,16 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
 
     private boolean handleAdmin(CommandSender sender, List<String> args) {
         if (args.isEmpty()) {
-            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip admin <addvip|addfakevip|removevip|generate|givepackage|giveitemkey|audit|webstore>", "Uso: /easyvip admin <...>"));
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip admin <addvip|addfakevip|removevip|generate|givepackage|giveitemkey|audit|webstore|network>", "Uso: /easyvip admin <...>"));
             return true;
         }
 
         String sub = args.get(0).toLowerCase(Locale.ROOT);
 
         switch (sub) {
+            case "network":
+                return handleNetworkDiagnostics(sender, args.subList(1, args.size()));
+
             case "addvip": {
                 if (args.size() < 4) {
                     TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip admin addvip <player> <tier> <duration>", "Uso: /easyvip admin addvip <player> <tier> <duração>"));
@@ -1015,6 +1019,46 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         }
 
         return true;
+    }
+
+    private boolean handleNetworkDiagnostics(CommandSender sender, List<String> args) {
+        if (!(plugin instanceof br.com.pedrodalben.easyvip.paper.EasyVipPaperPlugin paper)) {
+            TextUtil.sendMessage(sender, "§cEasyVip network diagnostics are unavailable.");
+            return true;
+        }
+        String sub = args.isEmpty() ? "status" : args.get(0).toLowerCase(Locale.ROOT);
+        if ("nodes".equals(sub)) {
+            var nodes = paper.networkNodes();
+            if (nodes == null) {
+                TextUtil.sendMessage(sender, "§7[§eEasyVip§7] Redis is disabled; no node registry is available.");
+                return true;
+            }
+            nodes.visibleNodes(java.time.Instant.now()).whenComplete((visible, error) ->
+                    sendNetworkMessage(sender, error == null
+                            ? "§7[§eEasyVip§7] Active nodes: " + visible.stream()
+                            .map(node -> node.identity().nodeId()).sorted().toList()
+                            : "§cUnable to query active nodes."));
+            return true;
+        }
+        if (!Set.of("status", "cache", "redis", "database", "deliveries").contains(sub)) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "Usage: /easyvip admin network <status|nodes|cache|redis|database|deliveries>",
+                    "Uso: /easyvip admin network <status|nodes|cache|redis|database|deliveries>"));
+            return true;
+        }
+        paper.networkStatusAsync().whenComplete((status, error) ->
+                sendNetworkMessage(sender, error == null
+                        ? "§7[§eEasyVip§7] " + status
+                        : "§cUnable to collect network diagnostics."));
+        return true;
+    }
+
+    private void sendNetworkMessage(CommandSender sender, String message) {
+        try {
+            Bukkit.getScheduler().runTask(plugin, () -> TextUtil.sendMessage(sender, message));
+        } catch (IllegalStateException ignored) {
+            TextUtil.sendMessage(sender, message);
+        }
     }
 
     private boolean handleGenerate(CommandSender sender, List<String> args) {

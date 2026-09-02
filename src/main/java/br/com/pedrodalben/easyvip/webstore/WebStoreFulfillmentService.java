@@ -55,6 +55,9 @@ public final class WebStoreFulfillmentService {
     private static final String SIGNATURE_PREFIX = "v1=";
     private static final String RESPONSE_SIGNATURE_PREFIX = "v1=";
     private static final int MAX_GENERATION_ATTEMPTS = 1000;
+    private static final int MAX_RESPONSE_BYTES = 256 * 1024;
+    private static final int MAX_FULFILLMENTS_PER_RESPONSE = 100;
+    private static final int MAX_ITEMS_PER_FULFILLMENT = 100;
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -899,6 +902,9 @@ public final class WebStoreFulfillmentService {
 
         HttpResponse<byte[]> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofByteArray());
         byte[] responseBody = response.body() != null ? response.body() : new byte[0];
+        if (responseBody.length > MAX_RESPONSE_BYTES) {
+            return SignedResponse.failure(response.statusCode(), new byte[0]);
+        }
         if (!validateResponseSignature(response, responseBody, nonce, secret)) {
             return SignedResponse.failure(response.statusCode(), responseBody);
         }
@@ -918,7 +924,11 @@ public final class WebStoreFulfillmentService {
             return false;
         }
         long now = Instant.now().getEpochSecond();
-        if (Math.abs(now - timestamp) > EasyVipConfig.fulfillment.timestampToleranceSeconds) {
+        long tolerance = Math.max(1L, EasyVipConfig.fulfillment.timestampToleranceSeconds);
+        long pastDelta = timestamp < now ? now - timestamp : 0L;
+        long futureDelta = timestamp > now ? timestamp - now : 0L;
+        if (pastDelta < 0L || futureDelta < 0L
+                || pastDelta > tolerance || futureDelta > tolerance) {
             return false;
         }
         String canonical = timestamp + "\n"
@@ -953,6 +963,9 @@ public final class WebStoreFulfillmentService {
 
         ClaimResponse response = new ClaimResponse();
         JsonArray array = root.getAsJsonArray("fulfillments");
+        if (array.size() > MAX_FULFILLMENTS_PER_RESPONSE) {
+            throw new IllegalArgumentException("too_many_fulfillments");
+        }
         for (JsonElement element : array) {
             if (!element.isJsonObject()) {
                 throw new IllegalArgumentException("invalid_fulfillment");
@@ -983,6 +996,9 @@ public final class WebStoreFulfillmentService {
             JsonArray items = obj.getAsJsonArray("items");
             if (items == null || items.isEmpty()) {
                 throw new IllegalArgumentException("empty_items");
+            }
+            if (items.size() > MAX_ITEMS_PER_FULFILLMENT) {
+                throw new IllegalArgumentException("too_many_items");
             }
             for (JsonElement itemEl : items) {
                 if (!itemEl.isJsonObject()) {
@@ -1024,7 +1040,9 @@ public final class WebStoreFulfillmentService {
         if (!element.isJsonPrimitive()) {
             throw new IllegalArgumentException("invalid_field:" + key);
         }
-        return element.getAsString();
+        String value = element.getAsString();
+        if (value.length() > 4096) throw new IllegalArgumentException("field_too_long:" + key);
+        return value;
     }
 
     private static int getJsonInt(JsonObject obj, String key) {

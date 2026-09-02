@@ -57,7 +57,8 @@ public final class ActionExecutor {
                     allOk = false;
                 }
             } catch (Throwable e) {
-                System.err.println("[EasyVip] Error executing action of type " + action.get("type") + ": " + e.getMessage());
+                System.err.println("[EasyVip] Error executing action of type " + action.get("type")
+                        + ": " + e.getClass().getSimpleName());
                 if (EasyVipConfig.common.debug) {
                     e.printStackTrace();
                 }
@@ -390,12 +391,13 @@ public final class ActionExecutor {
             return false;
         }
         try {
-            if (Bukkit.getServer() != null) {
-                return Bukkit.dispatchCommand(Bukkit.getConsoleSender(), normalized);
-            }
-        } catch (Throwable ignored) {
+            if (Bukkit.getServer() == null) return false;
+            return Bukkit.dispatchCommand(Bukkit.getConsoleSender(), normalized);
+        } catch (Throwable exception) {
+            System.err.println("[EasyVip] Command execution failed: " + commandName(normalized)
+                    + " (" + exception.getClass().getSimpleName() + ")");
+            return false;
         }
-        return true;
     }
 
 
@@ -410,6 +412,11 @@ public final class ActionExecutor {
             return false;
         }
         return player.performCommand(normalized);
+    }
+
+    private static String commandName(String normalized) {
+        int separator = normalized.indexOf(' ');
+        return separator < 0 ? normalized : normalized.substring(0, separator);
     }
 
     private static boolean executeFtbRankCommand(String cmd) {

@@ -46,6 +46,7 @@ Fully backported from the EasyVip mod with 100% feature parity, zero mod depende
   - **Velocity** adapter with the same API/core, generic capability commands, Redis invalidation, and SQL authority.
   - **Durable delivery ledger** with idempotency keys and crash-recoverable leases for SQL package/key effects.
   - **LuckPerms projection** under the `easyvip.managed.` namespace; unrelated nodes are preserved.
+  - **GOAL 06 hardening** with TLS-safe transport defaults, bounded responses, asynchronous diagnostics, and CI dependency review.
 
 ---
 
