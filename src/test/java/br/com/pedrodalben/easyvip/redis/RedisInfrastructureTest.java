@@ -16,7 +16,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -69,6 +72,74 @@ class RedisInfrastructureTest {
         assertSame(view, cache.get(PLAYER, CONTEXT, () -> { loads.incrementAndGet(); return view; }));
         assertEquals(2, loads.get());
         assertEquals(1L, cache.stats().hitCount());
+    }
+
+    @Test
+    void unknownInvalidationCannotBeUndoneByAnInFlightLoad() throws Exception {
+        EntitlementCache cache = new EntitlementCache(10, Duration.ofMinutes(1));
+        EffectiveEntitlementView view = new EffectiveEntitlementView(PLAYER, CONTEXT, List.of(),
+                new PlayerEntitlementView(Map.of("queue.priority", br.com.pedrodalben.easyvip.api.CapabilityValue.of(30))));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger loads = new AtomicInteger();
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var first = executor.submit(() -> cache.get(PLAYER, CONTEXT, () -> {
+                loads.incrementAndGet();
+                started.countDown();
+                try {
+                    assertTrue(release.await(2, TimeUnit.SECONDS));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                return view;
+            }));
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            cache.invalidate(PLAYER, 0L);
+            release.countDown();
+            assertSame(view, first.get(2, TimeUnit.SECONDS));
+
+            assertSame(view, cache.get(PLAYER, CONTEXT, () -> {
+                loads.incrementAndGet();
+                return view;
+            }));
+            assertEquals(2, loads.get());
+        }
+    }
+
+    @Test
+    void invalidateAllCannotBeUndoneByAnInFlightLoad() throws Exception {
+        EntitlementCache cache = new EntitlementCache(10, Duration.ofMinutes(1));
+        EffectiveEntitlementView view = new EffectiveEntitlementView(PLAYER, CONTEXT, List.of(),
+                new PlayerEntitlementView(Map.of("queue.priority", br.com.pedrodalben.easyvip.api.CapabilityValue.of(30))));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger loads = new AtomicInteger();
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var first = executor.submit(() -> cache.get(PLAYER, CONTEXT, () -> {
+                loads.incrementAndGet();
+                started.countDown();
+                try {
+                    assertTrue(release.await(2, TimeUnit.SECONDS));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                return view;
+            }));
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            cache.invalidateAll();
+            release.countDown();
+            assertSame(view, first.get(2, TimeUnit.SECONDS));
+
+            assertSame(view, cache.get(PLAYER, CONTEXT, () -> {
+                loads.incrementAndGet();
+                return view;
+            }));
+            assertEquals(2, loads.get());
+        }
     }
 
     @Test

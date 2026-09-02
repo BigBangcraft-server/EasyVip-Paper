@@ -21,6 +21,11 @@ Invalidation sources:
 * version `0` means unknown and conservatively invalidates;
 * TTL bounds staleness if a node misses Pub/Sub or restarts.
 
+Each invalidation advances a bounded per-player generation. A cold load that
+started before an invalidation cannot repopulate the cache with its stale view;
+the next read performs a fresh resolution. `invalidateAll` also advances a
+global epoch so in-flight loads cannot restore entries after a full reset.
+
 An older event cannot invalidate a view known to be newer. The version and
 event-id maps are bounded with the same configured maximum; eviction can cause
 a conservative reload, never a grant or permission escalation.
