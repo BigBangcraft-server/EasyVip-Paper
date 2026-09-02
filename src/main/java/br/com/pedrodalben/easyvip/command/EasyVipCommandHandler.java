@@ -648,18 +648,21 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             return true;
         }
 
-        if (PermissionBridge.isLuckPermsPresent() && EasyVipConfig.integrations.luckpermsEnabled) {
-            PermissionBridge.createGroup(id);
-        }
-
         Map<String, String> context = new HashMap<>();
         context.put("tier_display", def.displayName);
         context.put("tier_id", def.id);
-        TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(
-                EasyVipConfig.messages.prefix + EasyVipConfig.localized(
-                        "VIP {tier_display} created successfully.",
-                        "VIP {tier_display} criado com sucesso."
-                ), context));
+        PermissionBridge.createGroupAsync(id).whenComplete((created, error) -> runOnServer(() -> {
+            if (error != null || !Boolean.TRUE.equals(created)) {
+                TextUtil.sendMessage(sender, "§e" + EasyVipConfig.localized(
+                        "VIP was created, but its LuckPerms group could not be synchronized.",
+                        "VIP criado, mas o grupo do LuckPerms não pôde ser sincronizado."));
+            }
+            TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.localized(
+                            "VIP {tier_display} created successfully.",
+                            "VIP {tier_display} criado com sucesso."
+                    ), context));
+        }));
         return true;
     }
 

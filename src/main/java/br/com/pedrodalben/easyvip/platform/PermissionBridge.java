@@ -8,6 +8,7 @@ import br.com.pedrodalben.easyvip.projection.LuckPermsProjection;
 
 import java.util.Collection;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class PermissionBridge {
@@ -87,6 +88,13 @@ public final class PermissionBridge {
         }
     }
 
+    public static CompletionStage<Boolean> setPermissionAsync(UUID uuid, String permission, boolean value) {
+        if (!luckPermsPresent || !EasyVipConfig.integrations.luckpermsEnabled) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return LuckPermsWrapper.setPermissionAsync(uuid, permission, value);
+    }
+
     public static void setGroup(Player player, String group, boolean value) {
         if (player != null && luckPermsPresent && EasyVipConfig.integrations.luckpermsEnabled) {
             LuckPermsWrapper.setGroup(player, group, value);
@@ -99,11 +107,25 @@ public final class PermissionBridge {
         }
     }
 
+    public static CompletionStage<Boolean> setGroupAsync(UUID uuid, String group, boolean value) {
+        if (!luckPermsPresent || !EasyVipConfig.integrations.luckpermsEnabled) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return LuckPermsWrapper.setGroupAsync(uuid, group, value);
+    }
+
     public static boolean createGroup(String groupName) {
         if (luckPermsPresent && EasyVipConfig.integrations.luckpermsEnabled) {
             return LuckPermsWrapper.createGroup(groupName);
         }
         return false;
+    }
+
+    public static CompletionStage<Boolean> createGroupAsync(String groupName) {
+        if (!luckPermsPresent || !EasyVipConfig.integrations.luckpermsEnabled) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return LuckPermsWrapper.createGroupAsync(groupName);
     }
 
     public static CompletionStage<LuckPermsProjection.ProjectionResult> reconcileCapabilities(

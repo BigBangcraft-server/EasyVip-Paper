@@ -100,6 +100,20 @@ public final class ActionExecutor {
             step = packageId.isEmpty()
                     ? CompletableFuture.completedFuture(false)
                     : PackageService.givePackageAsync(plugin, player, packageId);
+        } else if ("give_permission_flag_internal".equalsIgnoreCase(type)
+                || "remove_permission_flag_internal".equalsIgnoreCase(type)) {
+            String permission = getString(action, "permission", "");
+            boolean value = "give_permission_flag_internal".equalsIgnoreCase(type);
+            step = permission.isEmpty() || platform == null
+                    ? CompletableFuture.completedFuture(false)
+                    : PermissionBridge.setPermissionAsync(player.getUniqueId(), permission, value);
+        } else if ("add_luckperms_group".equalsIgnoreCase(type)
+                || "remove_luckperms_group".equalsIgnoreCase(type)) {
+            String group = getString(action, "group", "");
+            boolean value = "add_luckperms_group".equalsIgnoreCase(type);
+            step = group.isEmpty()
+                    ? CompletableFuture.completedFuture(false)
+                    : PermissionBridge.setGroupAsync(player.getUniqueId(), group, value);
         } else {
             step = VipService.runOnServerAsync(plugin, player,
                     () -> execute(player, List.of(action), context));

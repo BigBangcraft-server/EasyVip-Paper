@@ -9,4 +9,7 @@ Unrelated LuckPerms permissions/groups are never selected for removal.
 Paper runs reconciliation asynchronously after a player joins. A missing or
 temporarily unavailable LuckPerms user fails the projection operation without
 changing entitlement state. Existing legacy tier-group actions remain
-compatible while consumers migrate to capability nodes.
+compatible while consumers migrate to capability nodes. Async action chains use
+the CompletionStage-based group/permission bridge, so LuckPerms user loading
+and saves do not block a Paper/Folia server thread; the synchronous methods are
+kept only for legacy callers.
