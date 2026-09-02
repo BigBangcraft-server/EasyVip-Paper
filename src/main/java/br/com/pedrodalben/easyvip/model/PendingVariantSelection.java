@@ -9,6 +9,7 @@ public class PendingVariantSelection {
     private String packageId;
     private List<String> variants = new ArrayList<>();
     private long timestamp;
+    private String claimId;
 
     public PendingVariantSelection() {
     }
@@ -50,6 +51,14 @@ public class PendingVariantSelection {
 
     public void setTimestamp(long timestamp) {
         this.timestamp = timestamp;
+    }
+
+    public String getClaimId() {
+        return claimId;
+    }
+
+    public void setClaimId(String claimId) {
+        this.claimId = claimId;
     }
 
     public boolean isExpired(long timeoutSeconds) {

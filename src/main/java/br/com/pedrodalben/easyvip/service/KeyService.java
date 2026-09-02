@@ -5,6 +5,7 @@ import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.model.KeyRecord;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
+import br.com.pedrodalben.easyvip.persistence.SqlDatabaseManager;
 import br.com.pedrodalben.easyvip.platform.TextUtil;
 import br.com.pedrodalben.easyvip.util.DurationParser;
 import br.com.pedrodalben.easyvip.util.KeySecurity;
@@ -218,6 +219,10 @@ public final class KeyService {
             return RedeemResult.CONFIRMATION_REQUIRED;
         }
 
+        if (PersistenceManager.isSqlMode()) {
+            return redeemKeySql(player, code, uuid, playerName, throttleType, applyCooldown, physicalInstanceId);
+        }
+
         Object lock = KEY_LOCKS.computeIfAbsent(code, k -> new Object());
         synchronized (lock) {
             KeyRecord record = PersistenceManager.getKey(code);
@@ -245,6 +250,57 @@ public final class KeyService {
                     + KeySecurity.describeKeyForLog(code));
             return RedeemResult.SUCCESS;
         }
+    }
+
+    private static RedeemResult redeemKeySql(Player player, String code, UUID uuid, String playerName,
+                                             CommandThrottleType throttleType, boolean applyCooldown,
+                                             String physicalInstanceId) {
+        KeyRecord preflightRecord = PersistenceManager.getKey(code);
+        RedeemResult preflight = preflightCheck(preflightRecord, uuid, physicalInstanceId);
+        if (preflight != null) return preflight;
+
+        boolean consumesUse = !("reward".equalsIgnoreCase(preflightRecord.getType())
+                && !isRewardConsumeOnUse(preflightRecord));
+        SqlDatabaseManager.KeyClaimResult claim = SqlDatabaseManager.claimKey(
+                code, uuid, physicalInstanceId, consumesUse, UUID.randomUUID().toString(),
+                System.currentTimeMillis(), 30_000L);
+        RedeemResult claimFailure = mapClaimStatus(claim.status());
+        if (claimFailure != null) return claimFailure;
+        KeyRecord record = claim.record();
+        if (record == null || claim.claimId() == null) return RedeemResult.ERROR;
+
+        Map<String, String> ctx = new HashMap<>();
+        ctx.put("player", playerName);
+        ctx.put("player_uuid", uuid.toString());
+        boolean success;
+        try {
+            success = executeKeyReward(player, record, ctx);
+        } catch (RuntimeException e) {
+            success = false;
+        }
+        if (!success) {
+            SqlDatabaseManager.releaseKeyClaim(claim.claimId(), "action_failed");
+            return RedeemResult.ERROR;
+        }
+        if (!SqlDatabaseManager.completeKeyClaim(claim.claimId(), uuid, consumesUse, System.currentTimeMillis())) {
+            return RedeemResult.ERROR;
+        }
+        if (applyCooldown) markCooldown(uuid, throttleType);
+        confirmations.remove(uuid);
+        PersistenceManager.log(playerName, "redeem_key", "Redeemed key " + KeySecurity.describeKeyForLog(code));
+        return RedeemResult.SUCCESS;
+    }
+
+    private static RedeemResult mapClaimStatus(SqlDatabaseManager.KeyClaimStatus status) {
+        return switch (status) {
+            case CLAIMED -> null;
+            case ALREADY_CLAIMED, ALREADY_USED -> RedeemResult.ALREADY_USED;
+            case INVALID_KEY -> RedeemResult.INVALID_KEY;
+            case EXPIRED -> RedeemResult.EXPIRED;
+            case NO_USES_LEFT -> RedeemResult.NO_USES_LEFT;
+            case BOUND_TO_OTHER -> RedeemResult.BOUND_TO_OTHER;
+            case ERROR -> RedeemResult.ERROR;
+        };
     }
 
     private static String normalizeCode(String rawCode) {

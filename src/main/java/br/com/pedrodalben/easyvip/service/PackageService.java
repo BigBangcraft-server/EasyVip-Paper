@@ -4,6 +4,7 @@ import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.model.PendingVariantSelection;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
+import br.com.pedrodalben.easyvip.persistence.SqlDatabaseManager;
 import br.com.pedrodalben.easyvip.platform.TextUtil;
 import org.bukkit.entity.Player;
 
@@ -28,6 +29,9 @@ public final class PackageService {
         int timeout = EasyVipConfig.common.variantSelectionTimeoutSeconds;
         for (PendingVariantSelection selection : new ArrayList<>(PersistenceManager.getPendingVariants(uuid))) {
             if (selection.isExpired(timeout)) {
+                if (PersistenceManager.isSqlMode() && selection.getClaimId() != null) {
+                    SqlDatabaseManager.releasePackageClaim(selection.getClaimId(), uuid, "selection_expired", System.currentTimeMillis());
+                }
                 PersistenceManager.removePendingVariant(uuid, selection.getPackageId());
                 removed++;
             }
@@ -69,6 +73,10 @@ public final class PackageService {
             TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
                     EasyVipConfig.messages.prefix + EasyVipConfig.messages.packageNotFound, new HashMap<>()));
             return false;
+        }
+
+        if (PersistenceManager.isSqlMode()) {
+            return givePackageSql(player, def, packageId);
         }
 
         if (!def.repeatable) {
@@ -123,6 +131,52 @@ public final class PackageService {
         }
     }
 
+    private static boolean givePackageSql(Player player, EasyVipConfig.PackageDefinition def, String packageId) {
+        UUID uuid = player.getUniqueId();
+        SqlDatabaseManager.PackageClaimResult claim = SqlDatabaseManager.claimPackage(
+                uuid, packageId, def.repeatable, def.cooldownSeconds * 1000L,
+                UUID.randomUUID().toString(), System.currentTimeMillis(), 60_000L);
+        if (claim.status() == SqlDatabaseManager.PackageClaimStatus.ALREADY_CLAIMED
+                || claim.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN) {
+            String en = claim.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN
+                    ? "&cThis package is still on cooldown."
+                    : "&cThis package has already been redeemed before.";
+            String pt = claim.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN
+                    ? "&cEste pacote ainda está em cooldown."
+                    : "&cEste pacote já foi resgatado anteriormente.";
+            TextUtil.sendMessage(player, EasyVipConfig.messages.prefix + EasyVipConfig.localized(en, pt));
+            return false;
+        }
+        if (claim.status() != SqlDatabaseManager.PackageClaimStatus.CLAIMED || claim.claimId() == null) {
+            return false;
+        }
+
+        Map<String, String> ctx = new HashMap<>();
+        ctx.put("package", def.displayName);
+        ctx.put("package_id", def.id);
+        if (def.variants != null && !def.variants.isEmpty()) {
+            PendingVariantSelection pending = new PendingVariantSelection(uuid, packageId,
+                    new ArrayList<>(def.variants.keySet()));
+            pending.setClaimId(claim.claimId());
+            PersistenceManager.addPendingVariant(uuid, pending);
+            TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.messages.variantPending, ctx));
+            return true;
+        }
+
+        if (!ActionExecutor.execute(player, def.actions, ctx)) {
+            SqlDatabaseManager.releasePackageClaim(claim.claimId(), uuid, "action_failed", System.currentTimeMillis());
+            return false;
+        }
+        if (!SqlDatabaseManager.completePackageClaim(claim.claimId(), uuid, System.currentTimeMillis())) {
+            return false;
+        }
+        TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                EasyVipConfig.messages.prefix + EasyVipConfig.messages.packageGiven, ctx));
+        PersistenceManager.log(player.getName(), "give_package", "Given package " + packageId + " to " + player.getName());
+        return true;
+    }
+
     public static boolean chooseVariant(Player player, String packageId, String variantName) {
         if (player == null) return false;
         UUID uuid = player.getUniqueId();
@@ -143,6 +197,9 @@ public final class PackageService {
         }
 
         if (match.isExpired(EasyVipConfig.common.variantSelectionTimeoutSeconds)) {
+            if (PersistenceManager.isSqlMode() && match.getClaimId() != null) {
+                SqlDatabaseManager.releasePackageClaim(match.getClaimId(), uuid, "selection_expired", System.currentTimeMillis());
+            }
             PersistenceManager.removePendingVariant(uuid, packageId);
             TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
                     EasyVipConfig.messages.prefix + EasyVipConfig.localized(
@@ -176,11 +233,20 @@ public final class PackageService {
         boolean ok = ActionExecutor.execute(player, def.actions, ctx);
         ok = ActionExecutor.execute(player, variantActions, ctx) && ok;
         if (!ok) {
+            if (PersistenceManager.isSqlMode() && match.getClaimId() != null) {
+                SqlDatabaseManager.releasePackageClaim(match.getClaimId(), uuid, "action_failed", System.currentTimeMillis());
+            }
             return false;
         }
 
+        if (PersistenceManager.isSqlMode() && match.getClaimId() != null
+                && !SqlDatabaseManager.completePackageClaim(match.getClaimId(), uuid, System.currentTimeMillis())) {
+            return false;
+        }
         PersistenceManager.removePendingVariant(uuid, packageId);
-        markPackageUsage(uuid, packageId);
+        if (!(PersistenceManager.isSqlMode() && match.getClaimId() != null)) {
+            markPackageUsage(uuid, packageId);
+        }
 
         TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
                 EasyVipConfig.messages.prefix + EasyVipConfig.messages.variantSelected, ctx));

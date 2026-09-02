@@ -9,6 +9,8 @@ public class PlayerVipRegistry {
     private String playerName;
     private Map<String, PlayerVipRecord> vips = new HashMap<>();
     private String lastObservedActiveVip;
+    /** Storage V2 optimistic-concurrency token; zero means an unpersisted legacy snapshot. */
+    private long version;
 
     public String getLastObservedActiveVip() {
         return lastObservedActiveVip;
@@ -47,5 +49,13 @@ public class PlayerVipRegistry {
 
     public void setVips(Map<String, PlayerVipRecord> vips) {
         this.vips = vips;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
     }
 }

@@ -1009,7 +1009,11 @@ public final class EasyVipConfig {
         public String sqlUsername = "";
         public String sqlPassword = "";
         public int sqlPoolSize = 10;
+        public int sqlMinimumIdle = 2;
         public int sqlConnectionTimeoutSeconds = 10;
+        public int sqlIdleTimeoutSeconds = 600;
+        public int sqlMaxLifetimeMinutes = 30;
+        public int sqlLeakDetectionThresholdSeconds = 0;
     }
 
     private static void loadIntegrations() throws IllegalArgumentException, IOException {
@@ -1027,7 +1031,11 @@ public final class EasyVipConfig {
             map.put("sql_username", integrations.sqlUsername);
             map.put("sql_password", integrations.sqlPassword);
             map.put("sql_pool_size", integrations.sqlPoolSize);
+            map.put("sql_minimum_idle", integrations.sqlMinimumIdle);
             map.put("sql_connection_timeout_seconds", integrations.sqlConnectionTimeoutSeconds);
+            map.put("sql_idle_timeout_seconds", integrations.sqlIdleTimeoutSeconds);
+            map.put("sql_max_lifetime_minutes", integrations.sqlMaxLifetimeMinutes);
+            map.put("sql_leak_detection_threshold_seconds", integrations.sqlLeakDetectionThresholdSeconds);
             TomlWriter.writeFile(file, map);
         }
 
@@ -1043,7 +1051,11 @@ public final class EasyVipConfig {
         integrations.sqlUsername = getString(data, "sql_username", "");
         integrations.sqlPassword = getString(data, "sql_password", "");
         integrations.sqlPoolSize = getInt(data, "sql_pool_size", 10);
+        integrations.sqlMinimumIdle = getInt(data, "sql_minimum_idle", 2);
         integrations.sqlConnectionTimeoutSeconds = getInt(data, "sql_connection_timeout_seconds", 10);
+        integrations.sqlIdleTimeoutSeconds = getInt(data, "sql_idle_timeout_seconds", 600);
+        integrations.sqlMaxLifetimeMinutes = getInt(data, "sql_max_lifetime_minutes", 30);
+        integrations.sqlLeakDetectionThresholdSeconds = getInt(data, "sql_leak_detection_threshold_seconds", 0);
     }
 
     private static void loadWebStore() throws IllegalArgumentException, IOException {

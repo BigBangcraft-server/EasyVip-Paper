@@ -12,15 +12,16 @@ network foundation one bounded goal at a time.
 * Added independent resolver/scope tests and documented the before/after graph.
 * Kept the existing tier and command paths intact for compatibility.
 
-## GOAL 02 — storage safety (next, not started)
+## GOAL 02 — storage safety (implemented, release gate still open)
 
-1. Introduce explicit migrations and a real HikariCP `DataSource`.
-2. Add normalized entitlement/grant, key-redemption, package-claim, and audit
-   tables without deleting the 1.2.0 JSON/blob data.
-3. Add reconciliation and verification before switching reads/writes.
-4. Replace JVM locks/read-modify-write with SQL transactions, unique keys,
-   compare-and-set, and atomic expiration transitions.
-5. Add concurrent MySQL/MariaDB-compatible tests; treat H2 as supplemental.
+1. Introduced migration ledger and a real HikariCP `DataSource`.
+2. Added normalized entitlement/grant, key-redemption, package-claim, delivery,
+   node, and preference tables without deleting JSON/blob data.
+3. Added legacy-to-V2 materialization and V2-first reads with legacy mirroring.
+4. Replaced SQL read/modify/write races with transactions, unique keys,
+   compare-and-set, leases, and atomic expiration transitions.
+5. Added pooled-connection concurrency tests; H2 is supplemental and the
+   MySQL/MariaDB lab remains a release gate.
 
 ## GOAL 03 — entitlement engine
 
@@ -49,6 +50,7 @@ network foundation one bounded goal at a time.
 
 ## Exit criteria for the next goal
 
-Do not start GOAL 02 until the current API tests and the existing full suite are
-green. Do not call the network ready until the acceptance criteria in the
-program brief have authoritative concurrency, outage, and migration evidence.
+Do not start GOAL 03 until the GOAL 02 focused and full suites are green and a
+supported MySQL/MariaDB run is recorded. Do not call the network ready until
+the acceptance criteria in the program brief have authoritative concurrency,
+outage, and migration evidence.

@@ -1,4 +1,4 @@
-# Threat Model — GOAL 01 Boundary
+# Threat Model — GOAL 02 Boundary
 
 This is the foundation audit, not a claim that distributed storage is already
 safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
@@ -32,11 +32,13 @@ safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
 ## Risks verified in the current code
 
 * JVM-local locks do not coordinate multiple Paper instances.
-* SQL credentials are held by a static manager and raw `DriverManager` is used;
-  Hikari is not active.
-* Tier/VIP and package state are mutable JSON blobs/read-modify-write paths.
+* SQL credentials are held by a static manager; lifecycle and secret rotation
+  remain operational concerns even though SQL connections now use HikariCP.
+* JSON mode still has mutable blob/read-modify-write paths; SQL mode uses the
+  normalized V2 tables and CAS/claim transactions.
 * Existing Bukkit events are local process events, not durable network events.
-* Expiration is scheduled independently on each node.
+* Expiration is scheduled independently on each node; V2 elects one database
+  transition winner before local actions.
 * Static bridges and global configuration increase test isolation and lifecycle
   coupling.
 
@@ -48,6 +50,6 @@ safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
 * explicit node/proxy trust configuration and secret redaction;
 * outage tests proving fail-closed entitlement decisions and SQL authority.
 
-No new network or privilege surface is enabled by GOAL 01: the API is read-only
-contracts and pure resolution logic. The open risks are recorded instead of
-being hidden behind the new interfaces.
+No new network or privilege surface is enabled by GOAL 02: SQL remains the
+authority, while leases and CAS make cross-node races explicit. Redis, proxy,
+delivery, and production failover risks remain open for later goals.

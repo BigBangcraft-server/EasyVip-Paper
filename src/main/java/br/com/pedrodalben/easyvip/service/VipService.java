@@ -7,6 +7,7 @@ import br.com.pedrodalben.easyvip.event.VipActivateEvent;
 import br.com.pedrodalben.easyvip.event.VipExpireEvent;
 import br.com.pedrodalben.easyvip.model.*;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
+import br.com.pedrodalben.easyvip.persistence.SqlDatabaseManager;
 import br.com.pedrodalben.easyvip.platform.TextUtil;
 import br.com.pedrodalben.easyvip.util.DurationParser;
 import org.bukkit.Bukkit;
@@ -661,6 +662,10 @@ public final class VipService {
             Map.Entry<String, PlayerVipRecord> entry = it.next();
             PlayerVipRecord record = entry.getValue();
             if (record.isExpired()) {
+                if (PersistenceManager.isSqlMode()
+                        && !SqlDatabaseManager.transitionEntitlementExpired(uuid, record.getTierId(), record.getStartTime(), System.currentTimeMillis())) {
+                    continue;
+                }
                 it.remove();
                 changed = true;
                 expiredCount++;

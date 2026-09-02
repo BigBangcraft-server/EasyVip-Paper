@@ -1,13 +1,13 @@
 # EasyVip Network Architecture
 
-Status: GOAL 01 foundation, Paper API `26.2.build.121-stable`, Java 25.
+Status: GOAL 02 storage V2, Paper API `26.2.build.121-stable`, Java 25.
 
 ## Audit of the current HEAD
 
 The repository is one Gradle Java project (`br.com.pedrodalben.easyvip`) with
-42 production classes and 23 test classes. The shaded Paper plugin is the only
-runtime artifact. The current commit audited for this document is the 26.2
-upgrade commit.
+42 production classes and 24 test classes. The shaded Paper plugin is the only
+runtime artifact. The current commit audited for this document includes the
+Storage V2 transition on top of the Paper 26.2 upgrade.
 
 ### Runtime flow
 
@@ -41,15 +41,14 @@ upgrade commit.
   `ExpirationService`, and `EasyVipPaperPlugin` use process-wide static state.
 * JSON state is held in `HashMap`/`ArrayList` fields protected by one JVM-local
   `ReentrantReadWriteLock` and flushed by a single executor.
-* SQL access opens connections with `DriverManager` for every operation. HikariCP
-  is declared but no `HikariDataSource` is constructed in the current code.
-* SQL VIP state is one `vips_data MEDIUMTEXT` row per player and is updated as a
-  read/modify/write blob. Package usage has the same whole-map replacement
-  shape.
-* Key redemption uses `ConcurrentHashMap` plus `synchronized` per code. This
-  serializes one JVM only; SQL is not currently the cross-node winner election.
-* Expiration schedules on every Paper node and invokes local lifecycle actions.
-  There is no distributed transition/lease in this goal.
+* SQL mode uses one HikariCP pool per lifecycle and borrows a connection for
+  each operation; JSON mode retains its JVM-local compatibility lock.
+* SQL VIP state is normalized into player, grant, and preference rows with an
+  optimistic version token; the legacy JSON row is mirrored for rollback.
+* SQL key and package claims use row locks, unique keys, and lease/status
+  transitions. JVM locks remain only around legacy CRUD paths.
+* Expiration schedules on every Paper node, but the V2 conditional transition
+  elects one database winner before local lifecycle actions run.
 * Web-store fulfillment already has transactional staging/claim fields and
   HMAC/replay checks; it remains an adapter until storage V2.
 

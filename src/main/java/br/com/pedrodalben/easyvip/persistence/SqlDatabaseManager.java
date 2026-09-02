@@ -1,13 +1,17 @@
 package br.com.pedrodalben.easyvip.persistence;
 
+import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.model.*;
 import br.com.pedrodalben.easyvip.webstore.model.FulfillmentRecord;
 import br.com.pedrodalben.easyvip.webstore.model.FulfillmentItemRecord;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
 
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -17,20 +21,39 @@ public final class SqlDatabaseManager {
     private static final Gson GSON = new GsonBuilder().create();
     private static final ReentrantReadWriteLock LOCK = new ReentrantReadWriteLock();
 
-    private static String url;
-    private static String username;
-    private static String password;
-    private static boolean initialized = false;
+    private static volatile HikariDataSource dataSource;
+    private static volatile boolean initialized = false;
 
     private SqlDatabaseManager() {
     }
 
-    public static void initialize(String dbUrl, String dbUsername, String dbPassword) {
-        url = dbUrl;
-        username = dbUsername;
-        password = dbPassword;
-        createTables();
-        initialized = true;
+    public static synchronized void initialize(String dbUrl, String dbUsername, String dbPassword) {
+        shutdown();
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(Objects.requireNonNull(dbUrl, "dbUrl"));
+        config.setUsername(dbUsername == null ? "" : dbUsername);
+        config.setPassword(dbPassword == null ? "" : dbPassword);
+        config.setMaximumPoolSize(Math.max(1, EasyVipConfig.integrations.sqlPoolSize));
+        config.setMinimumIdle(Math.max(0, Math.min(EasyVipConfig.integrations.sqlMinimumIdle,
+                Math.max(1, EasyVipConfig.integrations.sqlPoolSize))));
+        config.setConnectionTimeout(Math.max(250, EasyVipConfig.integrations.sqlConnectionTimeoutSeconds * 1000L));
+        config.setIdleTimeout(Math.max(10_000L, EasyVipConfig.integrations.sqlIdleTimeoutSeconds * 1000L));
+        config.setMaxLifetime(Math.max(30_000L, EasyVipConfig.integrations.sqlMaxLifetimeMinutes * 60_000L));
+        if (EasyVipConfig.integrations.sqlLeakDetectionThresholdSeconds > 0) {
+            config.setLeakDetectionThreshold(EasyVipConfig.integrations.sqlLeakDetectionThresholdSeconds * 1000L);
+        }
+        config.setPoolName("EasyVip-SQL");
+        config.addDataSourceProperty("useSSL", "false");
+        config.addDataSourceProperty("allowPublicKeyRetrieval", "true");
+        dataSource = new HikariDataSource(config);
+        try {
+            createTables();
+            migrateLegacyVipData();
+            initialized = true;
+        } catch (RuntimeException e) {
+            shutdown();
+            throw e;
+        }
     }
 
     public static boolean isInitialized() {
@@ -41,7 +64,11 @@ public final class SqlDatabaseManager {
         if (!initialized) {
             return false;
         }
-        try (Connection conn = getConnection()) {
+        HikariDataSource pool = dataSource;
+        if (pool == null || pool.isClosed()) {
+            return false;
+        }
+        try (Connection conn = pool.getConnection()) {
             return conn != null && conn.isValid(2);
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Health check failed: " + e.getMessage());
@@ -49,8 +76,13 @@ public final class SqlDatabaseManager {
         }
     }
 
-    public static void shutdown() {
+    public static synchronized void shutdown() {
         initialized = false;
+        HikariDataSource pool = dataSource;
+        dataSource = null;
+        if (pool != null) {
+            pool.close();
+        }
     }
 
     @FunctionalInterface
@@ -59,29 +91,137 @@ public final class SqlDatabaseManager {
     }
 
     public static <T> T withConnection(SqlWork<T> work) {
-        LOCK.writeLock().lock();
         try (Connection conn = getConnection()) {
             return work.apply(conn);
         } catch (SQLException e) {
             throw new RuntimeException("SQL operation failed: " + e.getMessage(), e);
-        } finally {
-            LOCK.writeLock().unlock();
         }
     }
 
     private static Connection getConnection() throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", username != null ? username : "");
-        props.setProperty("password", password != null ? password : "");
-        props.setProperty("useSSL", "false");
-        props.setProperty("allowPublicKeyRetrieval", "true");
-        return DriverManager.getConnection(url, props);
+        HikariDataSource pool = dataSource;
+        if (pool == null || pool.isClosed()) {
+            throw new SQLException("SQL datasource is not initialized");
+        }
+        return pool.getConnection();
     }
 
     // ─── Table Creation ──────────────────────────────────────
 
     private static void createTables() {
         try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_schema_migrations (
+                    version INT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    applied_at BIGINT NOT NULL
+                )
+            """);
+
+            // V2 tables are additive. Legacy tables remain available for read-only migration/reconciliation.
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_players (
+                    player_uuid VARCHAR(36) PRIMARY KEY,
+                    player_name VARCHAR(255) NOT NULL DEFAULT '',
+                    active_entitlement_id VARCHAR(255) DEFAULT NULL,
+                    version BIGINT NOT NULL DEFAULT 0,
+                    created_at BIGINT NOT NULL DEFAULT 0,
+                    updated_at BIGINT NOT NULL DEFAULT 0
+                )
+            """);
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_entitlement_grants (
+                    grant_id VARCHAR(36) PRIMARY KEY,
+                    player_uuid VARCHAR(36) NOT NULL,
+                    entitlement_id VARCHAR(255) NOT NULL,
+                    starts_at BIGINT NOT NULL,
+                    expires_at BIGINT NOT NULL DEFAULT -1,
+                    status VARCHAR(32) NOT NULL DEFAULT 'active',
+                    active BOOLEAN NOT NULL DEFAULT FALSE,
+                    pending_activate BOOLEAN NOT NULL DEFAULT FALSE,
+                    source VARCHAR(64) NOT NULL DEFAULT 'legacy',
+                    source_reference VARCHAR(255) DEFAULT NULL,
+                    created_by VARCHAR(255) DEFAULT NULL,
+                    created_at BIGINT NOT NULL DEFAULT 0,
+                    updated_at BIGINT NOT NULL DEFAULT 0,
+                    version BIGINT NOT NULL DEFAULT 0
+                )
+            """);
+            stmt.execute("CREATE INDEX IF NOT EXISTS ix_easyvip_entitlement_player ON easyvip_entitlement_grants (player_uuid)");
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_player_preferences (
+                    player_uuid VARCHAR(36) PRIMARY KEY,
+                    active_entitlement_id VARCHAR(255) DEFAULT NULL,
+                    version BIGINT NOT NULL DEFAULT 0,
+                    updated_at BIGINT NOT NULL DEFAULT 0
+                )
+            """);
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_key_redemptions (
+                    redemption_id VARCHAR(36) PRIMARY KEY,
+                    idempotency_key VARCHAR(255) NOT NULL,
+                    code VARCHAR(255) NOT NULL,
+                    player_uuid VARCHAR(36) NOT NULL,
+                    physical_instance_id VARCHAR(255) DEFAULT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    claimed_at BIGINT NOT NULL,
+                    lease_expires_at BIGINT NOT NULL,
+                    completed_at BIGINT DEFAULT NULL,
+                    failure_code VARCHAR(80) DEFAULT NULL,
+                    UNIQUE (idempotency_key),
+                    UNIQUE (code, physical_instance_id)
+                )
+            """);
+            stmt.execute("CREATE INDEX IF NOT EXISTS ix_easyvip_key_redemptions_code ON easyvip_key_redemptions (code, status)");
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_package_claims (
+                    claim_id VARCHAR(36) PRIMARY KEY,
+                    claim_key VARCHAR(512) NOT NULL,
+                    idempotency_key VARCHAR(255) NOT NULL,
+                    player_uuid VARCHAR(36) NOT NULL,
+                    package_id VARCHAR(255) NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    claimed_at BIGINT NOT NULL,
+                    lease_expires_at BIGINT NOT NULL,
+                    completed_at BIGINT DEFAULT NULL,
+                    failure_code VARCHAR(80) DEFAULT NULL,
+                    UNIQUE (claim_key),
+                    UNIQUE (idempotency_key)
+                )
+            """);
+            stmt.execute("CREATE INDEX IF NOT EXISTS ix_easyvip_package_claims_lookup ON easyvip_package_claims (player_uuid, package_id, status, claimed_at)");
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_deliveries (
+                    delivery_id VARCHAR(36) PRIMARY KEY,
+                    player_uuid VARCHAR(36) NOT NULL,
+                    grant_id VARCHAR(36) DEFAULT NULL,
+                    benefit_id VARCHAR(255) NOT NULL,
+                    scope_type VARCHAR(32) NOT NULL,
+                    scope_value VARCHAR(255) NOT NULL,
+                    idempotency_key VARCHAR(255) NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    claimed_by_node VARCHAR(255) DEFAULT NULL,
+                    lease_expires_at BIGINT DEFAULT NULL,
+                    attempts INT NOT NULL DEFAULT 0,
+                    created_at BIGINT NOT NULL,
+                    delivered_at BIGINT DEFAULT NULL,
+                    failure_code VARCHAR(80) DEFAULT NULL,
+                    UNIQUE (idempotency_key)
+                )
+            """);
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS easyvip_network_nodes (
+                    node_id VARCHAR(255) PRIMARY KEY,
+                    node_group VARCHAR(255) NOT NULL,
+                    environment VARCHAR(255) NOT NULL,
+                    tags_json TEXT,
+                    plugin_version VARCHAR(64) NOT NULL DEFAULT '',
+                    api_version VARCHAR(64) NOT NULL DEFAULT '',
+                    started_at BIGINT NOT NULL DEFAULT 0,
+                    last_heartbeat_at BIGINT NOT NULL DEFAULT 0
+                )
+            """);
+
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS easyvip_vips (
                     player_uuid VARCHAR(36) PRIMARY KEY,
@@ -149,6 +289,9 @@ public final class SqlDatabaseManager {
 
             // Schema migrations for existing databases
             ensureColumnExists(conn, "easyvip_keys", "consumed_instances_json", "MEDIUMTEXT");
+            ensureColumnExists(conn, "easyvip_package_claims", "claim_key", "VARCHAR(512) DEFAULT NULL");
+            stmt.execute("UPDATE easyvip_package_claims SET claim_key = CONCAT('legacy:', claim_id) WHERE claim_key IS NULL OR claim_key = ''");
+            ensureUniqueIndex(conn, "easyvip_package_claims", "ux_easyvip_package_claim_key", "claim_key");
             ensureColumnExists(conn, "webstore_fulfillments", "server_id", "VARCHAR(255) NOT NULL DEFAULT ''");
             ensureColumnExists(conn, "webstore_fulfillments", "origin_server_id", "VARCHAR(255) NOT NULL DEFAULT ''");
             ensureColumnExists(conn, "webstore_fulfillments", "claimed_at", "BIGINT DEFAULT NULL");
@@ -170,9 +313,11 @@ public final class SqlDatabaseManager {
                     player_uuid VARCHAR(36) NOT NULL,
                     package_id VARCHAR(255) NOT NULL,
                     variants_json TEXT,
-                    timestamp BIGINT NOT NULL DEFAULT 0
+                    timestamp BIGINT NOT NULL DEFAULT 0,
+                    claim_id VARCHAR(36) DEFAULT NULL
                 )
             """);
+            ensureColumnExists(conn, "easyvip_pending_variants", "claim_id", "VARCHAR(36) DEFAULT NULL");
 
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS easyvip_package_usage (
@@ -221,31 +366,46 @@ public final class SqlDatabaseManager {
                     created_at BIGINT NOT NULL DEFAULT 0
                 )
             """);
+
+            recordMigration(conn, 1, "storage-v2-foundation");
         } catch (SQLException e) {
             throw new RuntimeException("Failed to create database tables", e);
         }
     }
 
-    private static void ensureUniqueIndex(Connection conn, String table, String indexName, String column) {
+    private static void recordMigration(Connection conn, int version, String name) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?")) {
-            ps.setString(1, table);
-            ps.setString(2, indexName);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next() && rs.getInt(1) == 0) {
-                    try (Statement alter = conn.createStatement()) {
-                        alter.execute("ALTER TABLE " + table + " ADD UNIQUE KEY " + indexName + " (" + column + ")");
-                    }
-                }
+                "INSERT INTO easyvip_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")) {
+            ps.setInt(1, version);
+            ps.setString(2, name);
+            ps.setLong(3, System.currentTimeMillis());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            if (!isDuplicateKeyError(e)) {
+                throw e;
+            }
+        }
+    }
+
+    private static void ensureUniqueIndex(Connection conn, String table, String indexName, String column) {
+        try (ResultSet indexes = conn.getMetaData().getIndexInfo(null, null, table, true, false)) {
+            while (indexes.next()) {
+                String existing = indexes.getString("INDEX_NAME");
+                if (existing != null && existing.equalsIgnoreCase(indexName)) return;
+            }
+            try (Statement create = conn.createStatement()) {
+                create.execute("CREATE UNIQUE INDEX " + indexName + " ON " + table + " (" + column + ")");
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Failed to ensure unique index " + table + "." + indexName + ": " + e.getMessage());
+            if (!isDuplicateKeyError(e)) {
+                System.err.println("[EasyVip-SQL] Failed to ensure unique index " + table + "." + indexName + ": " + e.getMessage());
+            }
         }
     }
 
     private static void ensureColumnExists(Connection conn, String table, String column, String type) {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = ? AND column_name = ?")) {
+                "SELECT COUNT(*) FROM information_schema.columns WHERE UPPER(table_name) = UPPER(?) AND UPPER(column_name) = UPPER(?)")) {
             ps.setString(1, table);
             ps.setString(2, column);
             try (ResultSet rs = ps.executeQuery()) {
@@ -260,30 +420,104 @@ public final class SqlDatabaseManager {
         }
     }
 
+    private static void migrateLegacyVipData() {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT player_uuid, player_name, last_observed_active_vip, vips_data FROM easyvip_vips");
+             ResultSet rs = ps.executeQuery()) {
+            conn.setAutoCommit(false);
+            while (rs.next()) {
+                UUID uuid = UUID.fromString(rs.getString("player_uuid"));
+                long now = System.currentTimeMillis();
+                ensureV2Player(conn, uuid, rs.getString("player_name"), rs.getString("last_observed_active_vip"), now);
+                String json = rs.getString("vips_data");
+                if (json != null && !json.isBlank()) {
+                    Type type = new TypeToken<Map<String, PlayerVipRecord>>() {}.getType();
+                    Map<String, PlayerVipRecord> records = GSON.fromJson(json, type);
+                    if (records != null) {
+                        for (PlayerVipRecord record : records.values()) {
+                            insertLegacyGrant(conn, uuid, record, now);
+                        }
+                    }
+                }
+                if (rs.getString("last_observed_active_vip") != null) {
+                    upsertPreference(conn, uuid, rs.getString("last_observed_active_vip"), now);
+                }
+            }
+            conn.commit();
+            conn.setAutoCommit(true);
+        } catch (SQLException | RuntimeException e) {
+            System.err.println("[EasyVip-SQL] Legacy VIP migration skipped: " + e.getMessage());
+        }
+    }
+
+    private static void ensureV2Player(Connection conn, UUID uuid, String name, String active, long now) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO easyvip_players (player_uuid, player_name, active_entitlement_id, version, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, name == null ? "" : name);
+            ps.setString(3, active);
+            ps.setLong(4, now);
+            ps.setLong(5, now);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            if (!isDuplicateKeyError(e)) throw e;
+        }
+    }
+
+    private static void insertLegacyGrant(Connection conn, UUID uuid, PlayerVipRecord record, long now) throws SQLException {
+        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + record.getTierId() + ":" + record.getStartTime())
+                .getBytes(StandardCharsets.UTF_8)).toString();
+        try (PreparedStatement ps = conn.prepareStatement("""
+                INSERT INTO easyvip_entitlement_grants
+                (grant_id, player_uuid, entitlement_id, starts_at, expires_at, status, active,
+                 pending_activate, source, created_at, updated_at, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'legacy', ?, ?, 0)
+                """)) {
+            ps.setString(1, grantId);
+            ps.setString(2, uuid.toString());
+            ps.setString(3, record.getTierId());
+            ps.setLong(4, record.getStartTime());
+            ps.setLong(5, record.getExpiryTime());
+            ps.setString(6, record.isExpired() ? "expired" : "active");
+            ps.setBoolean(7, record.isActive());
+            ps.setBoolean(8, record.isPendingActivateActions());
+            ps.setLong(9, now);
+            ps.setLong(10, now);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            if (!isDuplicateKeyError(e)) throw e;
+        }
+    }
+
+    private static void upsertPreference(Connection conn, UUID uuid, String activeTier, long now) throws SQLException {
+        try (PreparedStatement delete = conn.prepareStatement("DELETE FROM easyvip_player_preferences WHERE player_uuid = ?");
+             PreparedStatement insert = conn.prepareStatement(
+                     "INSERT INTO easyvip_player_preferences (player_uuid, active_entitlement_id, version, updated_at) VALUES (?, ?, 0, ?)")) {
+            delete.setString(1, uuid.toString());
+            delete.executeUpdate();
+            insert.setString(1, uuid.toString());
+            insert.setString(2, activeTier);
+            insert.setLong(3, now);
+            insert.executeUpdate();
+        }
+    }
+
     // ─── VIPs ────────────────────────────────────────────────
 
     public static PlayerVipRegistry getPlayerVips(UUID uuid) {
         LOCK.readLock().lock();
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                 "SELECT player_name, last_observed_active_vip, vips_data FROM easyvip_vips WHERE player_uuid = ?")) {
+                 "SELECT player_name, active_entitlement_id, version FROM easyvip_players WHERE player_uuid = ?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    PlayerVipRegistry registry = new PlayerVipRegistry(uuid);
-                    registry.setPlayerName(rs.getString("player_name"));
-                    registry.setLastObservedActiveVip(rs.getString("last_observed_active_vip"));
-                    String vipsJson = rs.getString("vips_data");
-                    if (vipsJson != null && !vipsJson.isEmpty()) {
-                        Type type = new TypeToken<Map<String, PlayerVipRecord>>(){}.getType();
-                        Map<String, PlayerVipRecord> vips = GSON.fromJson(vipsJson, type);
-                        if (vips != null) {
-                            registry.setVips(vips);
-                        }
-                    }
-                    return registry;
+                    return readV2Registry(conn, uuid, rs.getString("player_name"),
+                            rs.getString("active_entitlement_id"), rs.getLong("version"));
                 }
             }
+            return readLegacyRegistry(conn, uuid);
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Error reading VIPs for " + uuid + ": " + e.getMessage());
         } finally {
@@ -298,21 +532,11 @@ public final class SqlDatabaseManager {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(
-                 "SELECT player_uuid, player_name, last_observed_active_vip, vips_data FROM easyvip_vips")) {
+                 "SELECT player_uuid, player_name, active_entitlement_id, version FROM easyvip_players")) {
             while (rs.next()) {
                 UUID uuid = UUID.fromString(rs.getString("player_uuid"));
-                PlayerVipRegistry registry = new PlayerVipRegistry(uuid);
-                registry.setPlayerName(rs.getString("player_name"));
-                registry.setLastObservedActiveVip(rs.getString("last_observed_active_vip"));
-                String vipsJson = rs.getString("vips_data");
-                if (vipsJson != null && !vipsJson.isEmpty()) {
-                    Type type = new TypeToken<Map<String, PlayerVipRecord>>(){}.getType();
-                    Map<String, PlayerVipRecord> vips = GSON.fromJson(vipsJson, type);
-                    if (vips != null) {
-                        registry.setVips(vips);
-                    }
-                }
-                result.put(uuid, registry);
+                result.put(uuid, readV2Registry(conn, uuid, rs.getString("player_name"),
+                        rs.getString("active_entitlement_id"), rs.getLong("version")));
             }
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Error reading all VIPs: " + e.getMessage());
@@ -323,19 +547,180 @@ public final class SqlDatabaseManager {
     }
 
     public static void updatePlayerVips(UUID uuid, PlayerVipRegistry registry) {
-        LOCK.writeLock().lock();
-        try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement(
-                 "REPLACE INTO easyvip_vips (player_uuid, player_name, last_observed_active_vip, vips_data) VALUES (?, ?, ?, ?)")) {
-            ps.setString(1, uuid.toString());
-            ps.setString(2, registry.getPlayerName() != null ? registry.getPlayerName() : "");
-            ps.setString(3, registry.getLastObservedActiveVip());
-            ps.setString(4, GSON.toJson(registry.getVips()));
-            ps.executeUpdate();
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            long now = System.currentTimeMillis();
+            long expectedVersion = registry.getVersion();
+            int updated = 0;
+            if (expectedVersion == 0) {
+                try (PreparedStatement insert = conn.prepareStatement("""
+                        INSERT INTO easyvip_players
+                        (player_uuid, player_name, active_entitlement_id, version, created_at, updated_at)
+                        VALUES (?, ?, ?, 1, ?, ?)
+                        """)) {
+                    insert.setString(1, uuid.toString());
+                    insert.setString(2, registry.getPlayerName() == null ? "" : registry.getPlayerName());
+                    insert.setString(3, registry.getLastObservedActiveVip());
+                    insert.setLong(4, now);
+                    insert.setLong(5, now);
+                    try {
+                        updated = insert.executeUpdate();
+                    } catch (SQLException e) {
+                        if (!isDuplicateKeyError(e)) throw e;
+                    }
+                }
+            }
+            if (updated == 0) {
+                try (PreparedStatement update = conn.prepareStatement("""
+                        UPDATE easyvip_players
+                        SET player_name = ?, active_entitlement_id = ?, version = version + 1, updated_at = ?
+                        WHERE player_uuid = ? AND version = ?
+                        """)) {
+                    update.setString(1, registry.getPlayerName() == null ? "" : registry.getPlayerName());
+                    update.setString(2, registry.getLastObservedActiveVip());
+                    update.setLong(3, now);
+                    update.setString(4, uuid.toString());
+                    update.setLong(5, expectedVersion);
+                    updated = update.executeUpdate();
+                }
+            }
+            if (updated != 1) {
+                conn.rollback();
+                throw new ConcurrentModificationException("Stale VIP snapshot for " + uuid);
+            }
+            Set<String> currentTierIds = new HashSet<>(registry.getVips().keySet());
+            revokeMissingGrants(conn, uuid, currentTierIds, now);
+            try (PreparedStatement delete = conn.prepareStatement(
+                    "DELETE FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active'")) {
+                delete.setString(1, uuid.toString());
+                delete.executeUpdate();
+            }
+            for (PlayerVipRecord record : registry.getVips().values()) {
+                insertCurrentGrant(conn, uuid, record, now);
+            }
+            upsertPreference(conn, uuid, registry.getLastObservedActiveVip(), now);
+
+            // Keep the legacy row synchronized for rollback/reconciliation tooling only.
+            try (PreparedStatement delete = conn.prepareStatement("DELETE FROM easyvip_vips WHERE player_uuid = ?");
+                 PreparedStatement insert = conn.prepareStatement("""
+                         INSERT INTO easyvip_vips (player_uuid, player_name, last_observed_active_vip, vips_data)
+                         VALUES (?, ?, ?, ?)
+                         """)) {
+                delete.setString(1, uuid.toString());
+                delete.executeUpdate();
+                insert.setString(1, uuid.toString());
+                insert.setString(2, registry.getPlayerName() == null ? "" : registry.getPlayerName());
+                insert.setString(3, registry.getLastObservedActiveVip());
+                insert.setString(4, GSON.toJson(registry.getVips()));
+                insert.executeUpdate();
+            }
+            conn.commit();
+            conn.setAutoCommit(true);
+            registry.setVersion(expectedVersion + 1);
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error updating VIPs for " + uuid + ": " + e.getMessage());
-        } finally {
-            LOCK.writeLock().unlock();
+            throw new RuntimeException("[EasyVip-SQL] Error updating VIPs for " + uuid, e);
+        }
+    }
+
+    private static PlayerVipRegistry readV2Registry(Connection conn, UUID uuid, String playerName,
+                                                     String activeTier, long version) throws SQLException {
+        PlayerVipRegistry registry = new PlayerVipRegistry(uuid);
+        registry.setPlayerName(playerName);
+        registry.setLastObservedActiveVip(activeTier);
+        registry.setVersion(version);
+        try (PreparedStatement ps = conn.prepareStatement("""
+                SELECT entitlement_id, starts_at, expires_at, active, pending_activate
+                FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active' AND active = TRUE
+                """)) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    PlayerVipRecord record = new PlayerVipRecord(rs.getString("entitlement_id"),
+                            rs.getLong("starts_at"), rs.getLong("expires_at"),
+                            rs.getBoolean("active"), rs.getBoolean("pending_activate"));
+                    registry.getVips().put(record.getTierId(), record);
+                }
+            }
+        }
+        return registry;
+    }
+
+    private static void revokeMissingGrants(Connection conn, UUID uuid, Set<String> currentTierIds, long now) throws SQLException {
+        try (PreparedStatement select = conn.prepareStatement(
+                "SELECT grant_id, entitlement_id FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active'");
+             PreparedStatement update = conn.prepareStatement(
+                     "UPDATE easyvip_entitlement_grants SET status = 'revoked', active = FALSE, updated_at = ?, version = version + 1 WHERE grant_id = ?")) {
+            select.setString(1, uuid.toString());
+            try (ResultSet rs = select.executeQuery()) {
+                while (rs.next()) {
+                    if (!currentTierIds.contains(rs.getString("entitlement_id"))) {
+                        update.setLong(1, now);
+                        update.setString(2, rs.getString("grant_id"));
+                        update.addBatch();
+                    }
+                }
+            }
+            update.executeBatch();
+        }
+    }
+
+    private static PlayerVipRegistry readLegacyRegistry(Connection conn, UUID uuid) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT player_name, last_observed_active_vip, vips_data FROM easyvip_vips WHERE player_uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return null;
+                PlayerVipRegistry registry = new PlayerVipRegistry(uuid);
+                registry.setPlayerName(rs.getString("player_name"));
+                registry.setLastObservedActiveVip(rs.getString("last_observed_active_vip"));
+                Type type = new TypeToken<Map<String, PlayerVipRecord>>() {}.getType();
+                Map<String, PlayerVipRecord> values = GSON.fromJson(rs.getString("vips_data"), type);
+                if (values != null) registry.setVips(values);
+                return registry;
+            }
+        }
+    }
+
+    private static void insertCurrentGrant(Connection conn, UUID uuid, PlayerVipRecord record, long now) throws SQLException {
+        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + record.getTierId() + ":" + record.getStartTime())
+                .getBytes(StandardCharsets.UTF_8)).toString();
+        try (PreparedStatement ps = conn.prepareStatement("""
+                INSERT INTO easyvip_entitlement_grants
+                (grant_id, player_uuid, entitlement_id, starts_at, expires_at, status, active,
+                 pending_activate, source, created_at, updated_at, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'legacy', ?, ?, 0)
+                """)) {
+            ps.setString(1, grantId);
+            ps.setString(2, uuid.toString());
+            ps.setString(3, record.getTierId());
+            ps.setLong(4, record.getStartTime());
+            ps.setLong(5, record.getExpiryTime());
+            ps.setString(6, record.isExpired() ? "expired" : "active");
+            ps.setBoolean(7, record.isActive());
+            ps.setBoolean(8, record.isPendingActivateActions());
+            ps.setLong(9, now);
+            ps.setLong(10, now);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Exactly one node can win an expiry transition for a normalized grant. */
+    public static boolean transitionEntitlementExpired(UUID uuid, String tierId, long startTime, long now) {
+        if (uuid == null || tierId == null) return false;
+        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + tierId + ":" + startTime)
+                .getBytes(StandardCharsets.UTF_8)).toString();
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement("""
+                     UPDATE easyvip_entitlement_grants
+                     SET status = 'expired', active = FALSE, updated_at = ?, version = version + 1
+                     WHERE grant_id = ? AND status = 'active' AND expires_at <> -1 AND expires_at <= ?
+                     """)) {
+            ps.setLong(1, now);
+            ps.setString(2, grantId);
+            ps.setLong(3, now);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            return false;
         }
     }
 
@@ -384,16 +769,29 @@ public final class SqlDatabaseManager {
 
     public static void putKey(KeyRecord record) {
         LOCK.writeLock().lock();
-        try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement("""
-                 REPLACE INTO easyvip_keys
-                 (code, type, tier_id, duration, reward_key_id, max_uses, used_count,
-                  bound_player_uuid, created_time, expiry_time, used_by_json,
-                  last_used_at_by_json, actions_json, consumed_instances_json)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 """)) {
-            setKeyStatement(ps, record);
-            ps.executeUpdate();
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement update = conn.prepareStatement("""
+                    UPDATE easyvip_keys SET type = ?, tier_id = ?, duration = ?, reward_key_id = ?,
+                        max_uses = ?, used_count = ?, bound_player_uuid = ?, created_time = ?, expiry_time = ?,
+                        used_by_json = ?, last_used_at_by_json = ?, actions_json = ?, consumed_instances_json = ?
+                    WHERE code = ?
+                    """)) {
+                setKeyUpdateStatement(update, record);
+                if (update.executeUpdate() == 0) {
+                    try (PreparedStatement insert = conn.prepareStatement("""
+                            INSERT INTO easyvip_keys
+                            (code, type, tier_id, duration, reward_key_id, max_uses, used_count,
+                             bound_player_uuid, created_time, expiry_time, used_by_json,
+                             last_used_at_by_json, actions_json, consumed_instances_json)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """)) {
+                        setKeyStatement(insert, record);
+                        insert.executeUpdate();
+                    }
+                }
+            }
+            conn.commit();
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Error saving key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(record.getCode()) + ": " + e.getMessage());
         } finally {
@@ -402,7 +800,6 @@ public final class SqlDatabaseManager {
     }
 
     public static KeyRecord putKeyIfAbsent(KeyRecord record) {
-        LOCK.writeLock().lock();
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);
             try {
@@ -443,8 +840,6 @@ public final class SqlDatabaseManager {
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Error getting connection for key insert: " + e.getMessage());
             return record;
-        } finally {
-            LOCK.writeLock().unlock();
         }
     }
 
@@ -470,16 +865,30 @@ public final class SqlDatabaseManager {
         ps.setString(14, GSON.toJson(record.getConsumedInstances()));
     }
 
+    private static void setKeyUpdateStatement(PreparedStatement ps, KeyRecord record) throws SQLException {
+        ps.setString(1, record.getType());
+        ps.setString(2, record.getTierId());
+        ps.setString(3, record.getDuration());
+        ps.setString(4, record.getRewardKeyId());
+        ps.setInt(5, record.getMaxUses());
+        ps.setInt(6, record.getUsedCount());
+        ps.setString(7, record.getBoundPlayerUuid() != null ? record.getBoundPlayerUuid().toString() : null);
+        ps.setLong(8, record.getCreatedTime());
+        ps.setLong(9, record.getExpiryTime());
+        ps.setString(10, GSON.toJson(record.getUsedBy()));
+        ps.setString(11, GSON.toJson(record.getLastUsedAtBy()));
+        ps.setString(12, GSON.toJson(record.getActions()));
+        ps.setString(13, GSON.toJson(record.getConsumedInstances()));
+        ps.setString(14, record.getCode());
+    }
+
     public static void removeKey(String code) {
-        LOCK.writeLock().lock();
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement("DELETE FROM easyvip_keys WHERE code = ?")) {
             ps.setString(1, code);
             ps.executeUpdate();
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Error removing key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code) + ": " + e.getMessage());
-        } finally {
-            LOCK.writeLock().unlock();
         }
     }
 
@@ -530,6 +939,277 @@ public final class SqlDatabaseManager {
         return record;
     }
 
+    public enum KeyClaimStatus {
+        CLAIMED,
+        ALREADY_CLAIMED,
+        INVALID_KEY,
+        EXPIRED,
+        NO_USES_LEFT,
+        ALREADY_USED,
+        BOUND_TO_OTHER,
+        ERROR
+    }
+
+    public record KeyClaimResult(KeyClaimStatus status, String claimId, KeyRecord record) {
+    }
+
+    /**
+     * Reserves one key use under a database transaction. The reservation lease
+     * prevents a crashed node from permanently consuming a key.
+     */
+    public static KeyClaimResult claimKey(String code, UUID playerUuid, String physicalInstanceId,
+                                          boolean consumesUse, String idempotencyKey, long now, long leaseMillis) {
+        if (code == null || playerUuid == null || idempotencyKey == null || idempotencyKey.isBlank()) {
+            return new KeyClaimResult(KeyClaimStatus.ERROR, null, null);
+        }
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            RedemptionRow existing = findRedemption(conn, idempotencyKey, true);
+            if (existing != null) {
+                KeyRecord existingKey = getKey(conn, existing.code());
+                conn.commit();
+                return new KeyClaimResult(KeyClaimStatus.ALREADY_CLAIMED, existing.redemptionId(), existingKey);
+            }
+
+            KeyRecord key = getKeyForUpdate(conn, code);
+            if (key == null) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.INVALID_KEY, null, null);
+            }
+            if (key.isExpired()) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.EXPIRED, null, key);
+            }
+            if (key.getBoundPlayerUuid() != null && !key.getBoundPlayerUuid().equals(playerUuid)) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.BOUND_TO_OTHER, null, key);
+            }
+            if (physicalInstanceId != null && key.getConsumedInstances().contains(physicalInstanceId)) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.ALREADY_USED, null, key);
+            }
+            if (consumesUse && key.getUsedBy().contains(playerUuid)) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.ALREADY_USED, null, key);
+            }
+
+            expireKeyClaims(conn, code, now);
+            RedemptionRow physicalClaim = physicalInstanceId == null
+                    ? null : findRedemptionByPhysical(conn, code, physicalInstanceId, true);
+            if (physicalClaim != null && ("CLAIMED".equals(physicalClaim.status())
+                    || "COMPLETE".equals(physicalClaim.status()))) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.ALREADY_USED, physicalClaim.redemptionId(), key);
+            }
+            long activeClaims = activeKeyClaims(conn, code, now);
+            if (consumesUse && key.getUsedCount() + activeClaims >= key.getMaxUses()) {
+                conn.rollback();
+                return new KeyClaimResult(KeyClaimStatus.NO_USES_LEFT, null, key);
+            }
+
+            String claimId = physicalClaim == null ? UUID.randomUUID().toString() : physicalClaim.redemptionId();
+            if (physicalClaim == null) {
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO easyvip_key_redemptions
+                        (redemption_id, idempotency_key, code, player_uuid, physical_instance_id,
+                         status, claimed_at, lease_expires_at)
+                        VALUES (?, ?, ?, ?, ?, 'CLAIMED', ?, ?)
+                        """)) {
+                    ps.setString(1, claimId);
+                    ps.setString(2, idempotencyKey);
+                    ps.setString(3, code);
+                    ps.setString(4, playerUuid.toString());
+                    if (physicalInstanceId == null) ps.setNull(5, Types.VARCHAR); else ps.setString(5, physicalInstanceId);
+                    ps.setLong(6, now);
+                    ps.setLong(7, now + Math.max(1_000L, leaseMillis));
+                    ps.executeUpdate();
+                }
+            } else {
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        UPDATE easyvip_key_redemptions
+                        SET idempotency_key = ?, player_uuid = ?, status = 'CLAIMED', claimed_at = ?,
+                            lease_expires_at = ?, completed_at = NULL, failure_code = NULL
+                        WHERE redemption_id = ?
+                        """)) {
+                    ps.setString(1, idempotencyKey);
+                    ps.setString(2, playerUuid.toString());
+                    ps.setLong(3, now);
+                    ps.setLong(4, now + Math.max(1_000L, leaseMillis));
+                    ps.setString(5, claimId);
+                    ps.executeUpdate();
+                }
+            }
+            conn.commit();
+            return new KeyClaimResult(KeyClaimStatus.CLAIMED, claimId, key);
+        } catch (SQLException e) {
+            if (isDuplicateKeyError(e) && physicalInstanceId != null) {
+                try (Connection conn = getConnection()) {
+                    RedemptionRow physicalClaim = findRedemptionByPhysical(conn, code, physicalInstanceId, false);
+                    if (physicalClaim != null && ("CLAIMED".equals(physicalClaim.status())
+                            || "COMPLETE".equals(physicalClaim.status()))) {
+                        return new KeyClaimResult(KeyClaimStatus.ALREADY_USED, physicalClaim.redemptionId(), null);
+                    }
+                } catch (SQLException ignored) {
+                }
+            }
+            return new KeyClaimResult(KeyClaimStatus.ERROR, null, null);
+        }
+    }
+
+    public static boolean completeKeyClaim(String claimId, UUID playerUuid, boolean consumesUse, long now) {
+        if (claimId == null || playerUuid == null) return false;
+        LOCK.writeLock().lock();
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            RedemptionRow claim = findRedemptionById(conn, claimId, true);
+            if (claim == null || !claim.playerUuid().equals(playerUuid.toString())) {
+                conn.rollback();
+                return false;
+            }
+            if ("COMPLETE".equals(claim.status())) {
+                conn.commit();
+                return true;
+            }
+            if (!"CLAIMED".equals(claim.status()) || claim.leaseExpiresAt() < now) {
+                conn.rollback();
+                return false;
+            }
+            KeyRecord key = getKeyForUpdate(conn, claim.code());
+            if (key == null || (consumesUse && key.getUsedCount() >= key.getMaxUses())) {
+                conn.rollback();
+                return false;
+            }
+            if (consumesUse) {
+                key.setUsedCount(key.getUsedCount() + 1);
+                key.getUsedBy().add(playerUuid);
+            }
+            key.getLastUsedAtBy().put(playerUuid, now);
+            if (claim.physicalInstanceId() != null) key.markInstanceConsumed(claim.physicalInstanceId());
+            updateKeyConsumption(conn, key);
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE easyvip_key_redemptions SET status = 'COMPLETE', completed_at = ? WHERE redemption_id = ?")) {
+                ps.setLong(1, now);
+                ps.setString(2, claimId);
+                ps.executeUpdate();
+            }
+            conn.commit();
+            return true;
+        } catch (SQLException e) {
+            return false;
+        } finally {
+            LOCK.writeLock().unlock();
+        }
+    }
+
+    public static boolean releaseKeyClaim(String claimId, String failureCode) {
+        if (claimId == null) return false;
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE easyvip_key_redemptions SET status = 'FAILED', failure_code = ? WHERE redemption_id = ? AND status = 'CLAIMED'")) {
+            ps.setString(1, failureCode == null ? "action_failed" : failureCode);
+            ps.setString(2, claimId);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private static void updateKeyConsumption(Connection conn, KeyRecord key) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("""
+                UPDATE easyvip_keys
+                SET used_count = ?, used_by_json = ?, last_used_at_by_json = ?, consumed_instances_json = ?
+                WHERE code = ?
+                """)) {
+            ps.setInt(1, key.getUsedCount());
+            ps.setString(2, GSON.toJson(key.getUsedBy()));
+            ps.setString(3, GSON.toJson(key.getLastUsedAtBy()));
+            ps.setString(4, GSON.toJson(key.getConsumedInstances()));
+            ps.setString(5, key.getCode());
+            ps.executeUpdate();
+        }
+    }
+
+    private static KeyRecord getKeyForUpdate(Connection conn, String code) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM easyvip_keys WHERE code = ? FOR UPDATE")) {
+            ps.setString(1, code);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? mapKeyRecord(rs) : null;
+            }
+        }
+    }
+
+    private static void expireKeyClaims(Connection conn, String code, long now) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("""
+                UPDATE easyvip_key_redemptions SET status = 'EXPIRED', failure_code = 'lease_expired'
+                WHERE code = ? AND status = 'CLAIMED' AND lease_expires_at < ?
+                """)) {
+            ps.setString(1, code);
+            ps.setLong(2, now);
+            ps.executeUpdate();
+        }
+    }
+
+    private static long activeKeyClaims(Connection conn, String code, long now) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("""
+                SELECT COUNT(*) FROM easyvip_key_redemptions
+                WHERE code = ? AND status = 'CLAIMED' AND lease_expires_at >= ?
+                """)) {
+            ps.setString(1, code);
+            ps.setLong(2, now);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    private record RedemptionRow(String redemptionId, String code, String playerUuid,
+                                 String physicalInstanceId, String status, long leaseExpiresAt) {
+    }
+
+    private static RedemptionRow findRedemption(Connection conn, String idempotencyKey, boolean forUpdate) throws SQLException {
+        String suffix = forUpdate ? " FOR UPDATE" : "";
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT redemption_id, code, player_uuid, physical_instance_id, status, lease_expires_at "
+                        + "FROM easyvip_key_redemptions WHERE idempotency_key = ?" + suffix)) {
+            ps.setString(1, idempotencyKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? mapRedemption(rs) : null;
+            }
+        }
+    }
+
+    private static RedemptionRow findRedemptionById(Connection conn, String claimId, boolean forUpdate) throws SQLException {
+        String suffix = forUpdate ? " FOR UPDATE" : "";
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT redemption_id, code, player_uuid, physical_instance_id, status, lease_expires_at "
+                        + "FROM easyvip_key_redemptions WHERE redemption_id = ?" + suffix)) {
+            ps.setString(1, claimId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? mapRedemption(rs) : null;
+            }
+        }
+    }
+
+    private static RedemptionRow findRedemptionByPhysical(Connection conn, String code, String physicalInstanceId,
+                                                          boolean forUpdate) throws SQLException {
+        String suffix = forUpdate ? " FOR UPDATE" : "";
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT redemption_id, code, player_uuid, physical_instance_id, status, lease_expires_at "
+                        + "FROM easyvip_key_redemptions WHERE code = ? AND physical_instance_id = ?" + suffix)) {
+            ps.setString(1, code);
+            ps.setString(2, physicalInstanceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? mapRedemption(rs) : null;
+            }
+        }
+    }
+
+    private static RedemptionRow mapRedemption(ResultSet rs) throws SQLException {
+        return new RedemptionRow(rs.getString("redemption_id"), rs.getString("code"),
+                rs.getString("player_uuid"), rs.getString("physical_instance_id"),
+                rs.getString("status"), rs.getLong("lease_expires_at"));
+    }
+
     // ─── Pending Variants ────────────────────────────────────
 
     public static List<PendingVariantSelection> getPendingVariants(UUID uuid) {
@@ -574,11 +1254,12 @@ public final class SqlDatabaseManager {
         LOCK.writeLock().lock();
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                 "INSERT INTO easyvip_pending_variants (player_uuid, package_id, variants_json, timestamp) VALUES (?, ?, ?, ?)")) {
+                 "INSERT INTO easyvip_pending_variants (player_uuid, package_id, variants_json, timestamp, claim_id) VALUES (?, ?, ?, ?, ?)")) {
             ps.setString(1, uuid.toString());
             ps.setString(2, selection.getPackageId());
             ps.setString(3, GSON.toJson(selection.getVariants()));
             ps.setLong(4, selection.getTimestamp());
+            ps.setString(5, selection.getClaimId());
             ps.executeUpdate();
         } catch (SQLException e) {
             System.err.println("[EasyVip-SQL] Error adding pending variant: " + e.getMessage());
@@ -612,6 +1293,11 @@ public final class SqlDatabaseManager {
             Type type = new TypeToken<List<String>>(){}.getType();
             List<String> variants = GSON.fromJson(variantsJson, type);
             if (variants != null) sel.setVariants(variants);
+        }
+        try {
+            sel.setClaimId(rs.getString("claim_id"));
+        } catch (SQLException ignored) {
+            // Legacy databases may not have the additive claim column yet.
         }
         return sel;
     }
@@ -686,6 +1372,152 @@ public final class SqlDatabaseManager {
             System.err.println("[EasyVip-SQL] Error updating package usage for " + uuid + ": " + e.getMessage());
         } finally {
             LOCK.writeLock().unlock();
+        }
+    }
+
+    public enum PackageClaimStatus {
+        CLAIMED,
+        ALREADY_CLAIMED,
+        COOLDOWN,
+        ERROR
+    }
+
+    public record PackageClaimResult(PackageClaimStatus status, String claimId) {
+    }
+
+    /** Atomically reserves a package claim; uniqueness and cooldown are DB decisions. */
+    public static PackageClaimResult claimPackage(UUID playerUuid, String packageId, boolean repeatable,
+                                                  long cooldownMillis, String idempotencyKey,
+                                                  long now, long leaseMillis) {
+        if (playerUuid == null || packageId == null || packageId.isBlank()
+                || idempotencyKey == null || idempotencyKey.isBlank()) {
+            return new PackageClaimResult(PackageClaimStatus.ERROR, null);
+        }
+        String claimKey = repeatable ? idempotencyKey : "once:" + playerUuid + ":" + packageId;
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            PackageClaimRow existing = findPackageClaim(conn, claimKey, true);
+            if (existing != null && "COMPLETE".equals(existing.status())) {
+                conn.commit();
+                return new PackageClaimResult(PackageClaimStatus.ALREADY_CLAIMED, existing.claimId());
+            }
+            if (existing != null && "CLAIMED".equals(existing.status()) && existing.leaseExpiresAt() >= now) {
+                conn.commit();
+                return new PackageClaimResult(PackageClaimStatus.ALREADY_CLAIMED, existing.claimId());
+            }
+            if (repeatable && cooldownMillis > 0) {
+                Long lastClaim = latestPackageClaim(conn, playerUuid, packageId);
+                if (lastClaim != null && now - lastClaim < cooldownMillis) {
+                    conn.rollback();
+                    return new PackageClaimResult(PackageClaimStatus.COOLDOWN, null);
+                }
+            }
+            String claimId = existing == null ? UUID.randomUUID().toString() : existing.claimId();
+            if (existing == null) {
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO easyvip_package_claims
+                        (claim_id, claim_key, idempotency_key, player_uuid, package_id, status,
+                         claimed_at, lease_expires_at)
+                        VALUES (?, ?, ?, ?, ?, 'CLAIMED', ?, ?)
+                        """)) {
+                    ps.setString(1, claimId);
+                    ps.setString(2, claimKey);
+                    ps.setString(3, idempotencyKey);
+                    ps.setString(4, playerUuid.toString());
+                    ps.setString(5, packageId);
+                    ps.setLong(6, now);
+                    ps.setLong(7, now + Math.max(1_000L, leaseMillis));
+                    ps.executeUpdate();
+                }
+            } else {
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        UPDATE easyvip_package_claims
+                        SET idempotency_key = ?, status = 'CLAIMED', claimed_at = ?, lease_expires_at = ?,
+                            completed_at = NULL, failure_code = NULL
+                        WHERE claim_id = ?
+                        """)) {
+                    ps.setString(1, idempotencyKey);
+                    ps.setLong(2, now);
+                    ps.setLong(3, now + Math.max(1_000L, leaseMillis));
+                    ps.setString(4, claimId);
+                    ps.executeUpdate();
+                }
+            }
+            conn.commit();
+            return new PackageClaimResult(PackageClaimStatus.CLAIMED, claimId);
+        } catch (SQLException e) {
+            if (isDuplicateKeyError(e)) {
+                try (Connection conn = getConnection()) {
+                    PackageClaimRow existing = findPackageClaim(conn, claimKey, false);
+                    return existing == null
+                            ? new PackageClaimResult(PackageClaimStatus.ERROR, null)
+                            : new PackageClaimResult(PackageClaimStatus.ALREADY_CLAIMED, existing.claimId());
+                } catch (SQLException ignored) {
+                    return new PackageClaimResult(PackageClaimStatus.ERROR, null);
+                }
+            }
+            return new PackageClaimResult(PackageClaimStatus.ERROR, null);
+        }
+    }
+
+    public static boolean completePackageClaim(String claimId, UUID playerUuid, long now) {
+        return updatePackageClaim(claimId, playerUuid, "COMPLETE", null, now, false);
+    }
+
+    public static boolean releasePackageClaim(String claimId, UUID playerUuid, String failureCode, long now) {
+        return updatePackageClaim(claimId, playerUuid, "FAILED", failureCode, now, true);
+    }
+
+    private static boolean updatePackageClaim(String claimId, UUID playerUuid, String status,
+                                              String failureCode, long now, boolean allowExpired) {
+        if (claimId == null || playerUuid == null) return false;
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement("""
+                     UPDATE easyvip_package_claims
+                     SET status = ?, failure_code = ?, completed_at = ?
+                     WHERE claim_id = ? AND player_uuid = ? AND status = 'CLAIMED'
+                       AND (lease_expires_at >= ? OR ? = TRUE)
+                     """)) {
+            ps.setString(1, status);
+            ps.setString(2, failureCode);
+            ps.setLong(3, now);
+            ps.setString(4, claimId);
+            ps.setString(5, playerUuid.toString());
+            ps.setLong(6, now);
+            ps.setBoolean(7, allowExpired);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private record PackageClaimRow(String claimId, String status, long claimedAt, long leaseExpiresAt) {
+    }
+
+    private static PackageClaimRow findPackageClaim(Connection conn, String claimKey, boolean forUpdate) throws SQLException {
+        String suffix = forUpdate ? " FOR UPDATE" : "";
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT claim_id, status, claimed_at, lease_expires_at FROM easyvip_package_claims WHERE claim_key = ?" + suffix)) {
+            ps.setString(1, claimKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? new PackageClaimRow(rs.getString("claim_id"), rs.getString("status"),
+                        rs.getLong("claimed_at"), rs.getLong("lease_expires_at")) : null;
+            }
+        }
+    }
+
+    private static Long latestPackageClaim(Connection conn, UUID playerUuid, String packageId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("""
+                SELECT MAX(claimed_at) FROM easyvip_package_claims
+                WHERE player_uuid = ? AND package_id = ? AND status = 'COMPLETE'
+                """)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setString(2, packageId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return null;
+                long value = rs.getLong(1);
+                return rs.wasNull() ? null : value;
+            }
         }
     }
 
