@@ -143,8 +143,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
                     + EasyVipConfig.packages.list.size() + " packages, "
                     + EasyVipConfig.rewardKeys.list.size() + " reward keys.");
         } catch (Exception e) {
-            getLogger().severe("Failed to initialize EasyVip configurations: " + e.getMessage());
-            e.printStackTrace();
+            getLogger().severe("Failed to initialize EasyVip configurations: " + e.getClass().getSimpleName());
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -155,8 +154,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
             getLogger().info("Persistence initialized in "
                     + (PersistenceManager.isSqlMode() ? "SQL" : "JSON") + " mode.");
         } catch (Exception e) {
-            getLogger().severe("Failed to initialize EasyVip persistence manager: " + e.getMessage());
-            e.printStackTrace();
+            getLogger().severe("Failed to initialize EasyVip persistence manager: " + e.getClass().getSimpleName());
             getServer().getPluginManager().disablePlugin(this);
             return;
         }

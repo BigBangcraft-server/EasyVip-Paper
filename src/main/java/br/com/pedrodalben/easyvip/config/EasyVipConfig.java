@@ -1481,6 +1481,10 @@ public final class EasyVipConfig {
                 errors.add("network.toml: redis_uri is invalid.");
             }
         }
+        if (integrations.sqlEnabled && isProductionRemoteSql(integrations.sqlUrl)
+                && !hasVerifyIdentitySslMode(integrations.sqlUrl)) {
+            errors.add("integrations.toml: remote production SQL must set sslMode=VERIFY_IDENTITY.");
+        }
         if (network.nodeId == null || network.nodeId.isBlank()) errors.add("network.toml: node_id cannot be empty.");
         if (network.group == null || network.group.isBlank()) errors.add("network.toml: group cannot be empty.");
         if (network.environment == null || network.environment.isBlank()) errors.add("network.toml: environment cannot be empty.");
@@ -1585,6 +1589,33 @@ public final class EasyVipConfig {
     private static boolean isLoopback(String host) {
         return host != null && ("localhost".equalsIgnoreCase(host)
                 || "127.0.0.1".equals(host) || "::1".equals(host));
+    }
+
+    private static boolean isProductionRemoteSql(String jdbcUrl) {
+        if (!"production".equalsIgnoreCase(network.environment) || jdbcUrl == null) return false;
+        String lower = jdbcUrl.toLowerCase(Locale.ROOT);
+        if (!(lower.startsWith("jdbc:mysql://") || lower.startsWith("jdbc:mariadb://"))) return false;
+        String authority = jdbcUrl.substring(jdbcUrl.indexOf("://") + 3);
+        int end = authority.length();
+        for (char delimiter : new char[]{'/', '?'}) {
+            int index = authority.indexOf(delimiter);
+            if (index >= 0) end = Math.min(end, index);
+        }
+        String host = authority.substring(0, end);
+        int at = host.lastIndexOf('@');
+        if (at >= 0) host = host.substring(at + 1);
+        if (host.startsWith("[")) {
+            int close = host.indexOf(']');
+            host = close > 0 ? host.substring(1, close) : host;
+        } else {
+            int colon = host.indexOf(':');
+            if (colon >= 0) host = host.substring(0, colon);
+        }
+        return !isLoopback(host);
+    }
+
+    private static boolean hasVerifyIdentitySslMode(String jdbcUrl) {
+        return jdbcUrl != null && jdbcUrl.toLowerCase(Locale.ROOT).contains("sslmode=verify_identity");
     }
 
     private static boolean validBenefitValue(String type, Object value) {

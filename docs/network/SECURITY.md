@@ -3,8 +3,8 @@
 ## Controls
 
 * SQL uses HikariCP; the plugin no longer forces `useSSL=false` or public-key
-  retrieval. Remote MySQL deployments must use `sslMode=VERIFY_IDENTITY` in the
-  JDBC URL and a managed trust store.
+  retrieval. Production remote MySQL/MariaDB configuration is rejected unless
+  it uses `sslMode=VERIFY_IDENTITY` in the JDBC URL and a managed trust store.
 * Production Redis endpoints must use `rediss://` unless they are loopback.
   Redis payloads are bounded, versioned, base64-delimited, schema-checked, and
   never treated as entitlement truth.
@@ -13,6 +13,8 @@
   exact JSON fields. Remote WebStore URLs must use HTTPS.
 * Console/player commands are normalized and checked by the configured allowlist;
   failed dispatch now returns failure instead of granting success.
+* WebStore/SQL failures log stable exception classes or digests rather than raw
+  response bodies, JDBC messages, URLs, or stack traces that could carry secrets.
 * Keys use `SecureRandom`, are masked/fingerprinted in audit output, and are
   redeemed through SQL claims and unique constraints.
 * LuckPerms reconciliation touches only the `easyvip.managed.*` namespace.

@@ -78,7 +78,7 @@ public final class SqlDatabaseManager {
         try (Connection conn = pool.getConnection()) {
             return conn != null && conn.isValid(2);
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Health check failed: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Health check failed: " + sqlFailure(e));
             return false;
         }
     }
@@ -141,8 +141,13 @@ public final class SqlDatabaseManager {
         try (Connection conn = getConnection()) {
             return work.apply(conn);
         } catch (SQLException e) {
-            throw new RuntimeException("SQL operation failed: " + e.getMessage(), e);
+            throw new RuntimeException("SQL operation failed: " + sqlFailure(e), e);
         }
+    }
+
+    private static String sqlFailure(SQLException exception) {
+        String state = exception.getSQLState();
+        return exception.getClass().getSimpleName() + (state == null ? "" : " state=" + state);
     }
 
     private static Connection getConnection() throws SQLException {

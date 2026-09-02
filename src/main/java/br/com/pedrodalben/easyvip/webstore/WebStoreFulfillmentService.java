@@ -17,8 +17,6 @@ import com.google.gson.JsonParser;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -193,7 +191,7 @@ public final class WebStoreFulfillmentService {
             logFile = dataDir.resolve("webstore_fulfillment.log");
             emptyPollLogged = false;
         } catch (IOException e) {
-            System.err.println("[EasyVip-Fulfillment] Failed to initialize log file: " + e.getMessage());
+            System.err.println("[EasyVip-Fulfillment] Failed to initialize log file: " + e.getClass().getSimpleName());
         }
     }
 
@@ -786,11 +784,11 @@ public final class WebStoreFulfillmentService {
                 return CompleteResponse.definitiveError("server_mismatch");
             }
             lastErrorCode = "complete_exception";
-            log("ERROR | " + serverLogPrefix() + "complete request failed: " + e.getMessage());
+            log("ERROR | " + serverLogPrefix() + "complete request failed: " + e.getClass().getSimpleName());
             return null;
         } catch (Exception e) {
             lastErrorCode = "complete_exception";
-            log("ERROR | " + serverLogPrefix() + "complete request failed: " + e.getMessage());
+            log("ERROR | " + serverLogPrefix() + "complete request failed: " + e.getClass().getSimpleName());
             return null;
         }
     }
@@ -819,9 +817,9 @@ public final class WebStoreFulfillmentService {
                 log("ERROR | " + serverLogPrefix() + "fail response rejected: server_mismatch");
                 return;
             }
-            log("ERROR | " + serverLogPrefix() + "fail request failed: " + e.getMessage());
+            log("ERROR | " + serverLogPrefix() + "fail request failed: " + e.getClass().getSimpleName());
         } catch (Exception e) {
-            log("ERROR | " + serverLogPrefix() + "fail request failed: " + e.getMessage());
+            log("ERROR | " + serverLogPrefix() + "fail request failed: " + e.getClass().getSimpleName());
         }
     }
 
@@ -862,11 +860,11 @@ public final class WebStoreFulfillmentService {
                 return null;
             }
             lastErrorCode = "claim_exception";
-            log("ERROR | " + serverLogPrefix() + "claim failed: " + e.getMessage());
+            log("ERROR | " + serverLogPrefix() + "claim failed: " + e.getClass().getSimpleName());
             return null;
         } catch (Exception e) {
             lastErrorCode = "claim_exception";
-            log("ERROR | " + serverLogPrefix() + "claim failed: " + e.getMessage());
+            log("ERROR | " + serverLogPrefix() + "claim failed: " + e.getClass().getSimpleName());
             return null;
         }
     }
@@ -1277,7 +1275,7 @@ public final class WebStoreFulfillmentService {
         try {
             Files.writeString(logFile, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException e) {
-            System.err.println("[EasyVip-Fulfillment] Failed to write log: " + e.getMessage());
+            System.err.println("[EasyVip-Fulfillment] Failed to write log: " + e.getClass().getSimpleName());
         }
         if (EasyVipConfig.common.debug) {
             System.out.println("[EasyVip-Fulfillment] " + message);
@@ -1285,14 +1283,11 @@ public final class WebStoreFulfillmentService {
     }
 
     private static void logException(String message, Throwable error) {
-        StringWriter details = new StringWriter();
-        error.printStackTrace(new PrintWriter(details));
-        log(message + System.lineSeparator() + details);
+        log(message + " (" + error.getClass().getSimpleName() + ")");
     }
 
     private static String exceptionMessage(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
+        return error.getClass().getSimpleName();
     }
 
     private static String serverLogPrefix() {

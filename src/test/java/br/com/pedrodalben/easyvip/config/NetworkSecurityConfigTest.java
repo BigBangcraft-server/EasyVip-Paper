@@ -13,6 +13,8 @@ class NetworkSecurityConfigTest {
     private final String environment = EasyVipConfig.network.environment;
     private final boolean webstoreEnabled = EasyVipConfig.webstore.enabled;
     private final String webstoreUrl = EasyVipConfig.webstore.apiUrl;
+    private final boolean sqlEnabled = EasyVipConfig.integrations.sqlEnabled;
+    private final String sqlUrl = EasyVipConfig.integrations.sqlUrl;
 
     @AfterEach
     void restore() {
@@ -21,6 +23,8 @@ class NetworkSecurityConfigTest {
         EasyVipConfig.network.environment = environment;
         EasyVipConfig.webstore.enabled = webstoreEnabled;
         EasyVipConfig.webstore.apiUrl = webstoreUrl;
+        EasyVipConfig.integrations.sqlEnabled = sqlEnabled;
+        EasyVipConfig.integrations.sqlUrl = sqlUrl;
     }
 
     @Test
@@ -52,5 +56,16 @@ class NetworkSecurityConfigTest {
         List<String> errors = EasyVipConfig.validate();
 
         assertTrue(errors.stream().anyMatch(error -> error.contains("api_url")));
+    }
+
+    @Test
+    void productionRemoteSqlRequiresIdentityVerification() {
+        EasyVipConfig.integrations.sqlEnabled = true;
+        EasyVipConfig.integrations.sqlUrl = "jdbc:mysql://db.example:3306/easyvip";
+        EasyVipConfig.network.environment = "production";
+
+        List<String> errors = EasyVipConfig.validate();
+
+        assertTrue(errors.stream().anyMatch(error -> error.contains("sslMode=VERIFY_IDENTITY")));
     }
 }

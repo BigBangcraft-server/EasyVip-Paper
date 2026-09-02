@@ -41,7 +41,7 @@ public final class WebStoreSyncService {
             logFile = dataDir.resolve("webstore_sync.log");
             log("WebStore sync log initialized");
         } catch (IOException e) {
-            System.err.println("[EasyVip-WebStore] Failed to create log file: " + e.getMessage());
+            System.err.println("[EasyVip-WebStore] Failed to create log file: " + e.getClass().getSimpleName());
         }
     }
 
@@ -63,9 +63,9 @@ public final class WebStoreSyncService {
                     log("SYNC_OK | " + username + " | " + uuid + " | HTTP " + status);
                 }
             } catch (Exception e) {
-                log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getMessage());
+                log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getClass().getSimpleName());
                 PersistenceManager.log("WebStore", "sync_failed",
-                        "Player " + username + " (" + uuid + "): " + e.getMessage());
+                        "Player " + username + " (" + uuid + "): " + e.getClass().getSimpleName());
             }
         });
     }
@@ -83,9 +83,9 @@ public final class WebStoreSyncService {
                 }
                 return status;
             } catch (Exception e) {
-                log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getMessage());
+                log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getClass().getSimpleName());
                 PersistenceManager.log("WebStore", "sync_failed",
-                        "Player " + username + " (" + uuid + "): " + e.getMessage());
+                        "Player " + username + " (" + uuid + "): " + e.getClass().getSimpleName());
                 return -1;
             }
         });
@@ -125,9 +125,9 @@ public final class WebStoreSyncService {
                         return status;
 
                     case 422:
-                        log("SYNC_422 | " + username + " | " + uuid + " | Payload invalido: " + response.body());
+                        log("SYNC_422 | " + username + " | " + uuid + " | response_sha256=" + bodyDigest(response.body()));
                         PersistenceManager.log("WebStore", "sync_422",
-                                "Player " + username + " (" + uuid + "): " + response.body());
+                                "Player " + username + " (" + uuid + "): response_sha256=" + bodyDigest(response.body()));
                         return status;
 
                     case 500:
@@ -136,7 +136,7 @@ public final class WebStoreSyncService {
                     case 504:
                         log("SYNC_RETRY | " + username + " | " + uuid + " | HTTP " + status
                                 + " | attempt " + attempt + "/" + maxAttempts);
-                        lastException = new RuntimeException("HTTP " + status + " — " + response.body());
+                        lastException = new RuntimeException("HTTP " + status);
                         break;
 
                     default:
@@ -151,7 +151,7 @@ public final class WebStoreSyncService {
                 Thread.currentThread().interrupt();
                 throw e;
             } catch (Exception e) {
-                log("SYNC_NET_ERR | " + username + " | " + uuid + " | " + e.getMessage()
+                log("SYNC_NET_ERR | " + username + " | " + uuid + " | " + e.getClass().getSimpleName()
                         + " | attempt " + attempt + "/" + maxAttempts);
                 lastException = e;
                 if (attempt < maxAttempts) {
@@ -161,7 +161,7 @@ public final class WebStoreSyncService {
         }
 
         throw lastException != null
-                ? new RuntimeException("Sync failed after " + maxAttempts + " tentativas. Ultimo erro: " + lastException.getMessage())
+                ? new RuntimeException("Sync failed after " + maxAttempts + " tentativas. Ultimo erro: " + lastException.getClass().getSimpleName())
                 : new RuntimeException("Sync failed after " + maxAttempts + " tentativas");
     }
 
@@ -201,7 +201,7 @@ public final class WebStoreSyncService {
             try {
                 sendChallenge(uuid, code);
             } catch (Exception e) {
-                log("CHALLENGE_FAIL | " + uuid + " | " + e.getMessage());
+                log("CHALLENGE_FAIL | " + uuid + " | " + e.getClass().getSimpleName());
             }
         });
     }
@@ -235,9 +235,9 @@ public final class WebStoreSyncService {
             PersistenceManager.log("WebStore", "challenge_401",
                     "Challenge 401 for " + uuid);
         } else {
-            log("CHALLENGE_ERR | " + uuid + " | HTTP " + status + " | " + response.body());
+            log("CHALLENGE_ERR | " + uuid + " | HTTP " + status + " | response_sha256=" + bodyDigest(response.body()));
             PersistenceManager.log("WebStore", "challenge_error",
-                    "Challenge HTTP " + status + " for " + uuid + ": " + response.body());
+                    "Challenge HTTP " + status + " for " + uuid + ": response_sha256=" + bodyDigest(response.body()));
         }
     }
 
@@ -251,6 +251,10 @@ public final class WebStoreSyncService {
         }
     }
 
+    private static String bodyDigest(String body) {
+        return sha256(body == null ? "" : body);
+    }
+
     private static synchronized void log(String message) {
         if (logFile == null) return;
 
@@ -258,7 +262,7 @@ public final class WebStoreSyncService {
         try {
             Files.writeString(logFile, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException e) {
-            System.err.println("[EasyVip-WebStore] Failed to write log: " + e.getMessage());
+            System.err.println("[EasyVip-WebStore] Failed to write log: " + e.getClass().getSimpleName());
         }
 
         if (EasyVipConfig.common.debug) {
