@@ -22,8 +22,8 @@ network-ready verdict.
 3. Added legacy-to-V2 materialization and V2-first reads with legacy mirroring.
 4. Replaced SQL read/modify/write races with transactions, unique keys,
    compare-and-set, leases, and atomic expiration transitions.
-5. Added pooled-connection concurrency tests; H2 and MySQL 8.4 are covered,
-   while the MariaDB lab remains a compatibility gate.
+5. Added pooled-connection concurrency tests; H2, MySQL 8.4, and MariaDB 11.4
+   are covered, including disposable restart labs.
 
 ## GOAL 03 — entitlement engine (implemented)
 

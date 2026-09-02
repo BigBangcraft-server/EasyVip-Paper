@@ -1,13 +1,13 @@
 # EasyVip Network Architecture
 
-Status: GOAL 05 delivery ledger, Velocity adapter, and projections; Paper API `26.2.build.121-stable`, Java 25.
+Status: GOAL 06 hardening in progress; Paper API `26.2.build.121-stable`, Java 25.
 
 ## Audit of the current HEAD
 
 The repository is one Gradle Java project (`br.com.pedrodalben.easyvip`) with
-42 production classes and 24 test classes. The shaded Paper plugin is the only
-runtime artifact. The current commit audited for this document includes the
-Storage V2 transition on top of the Paper 26.2 upgrade.
+42 production classes and 24 test classes. The build produces shaded Paper and
+Velocity runtime artifacts. The current commit audited for this document
+includes the Storage V2 transition and GOAL 06 hardening on Paper 26.2.
 
 ### Runtime flow
 

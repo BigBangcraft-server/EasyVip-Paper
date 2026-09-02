@@ -56,5 +56,5 @@ controls belong to GOAL 06 remain explicitly open.
 
 GOAL 06 adds TLS-safe defaults/validation, bounded WebStore responses,
 fail-closed command dispatch, asynchronous diagnostics, and durable expiry
-effect claims. Production failover, live proxy trust, and full operational
-audit remain unproven until the live test gates are executed.
+effect claims. Disposable database/Redis restart labs now pass; production
+certificate trust, proxy trust, and full operational audit remain unproven.
