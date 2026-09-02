@@ -22,16 +22,14 @@ public final class ExpirationService {
         pluginInstance = plugin;
         if (scheduler != null) return;
 
-        runOnServer(() -> {
-            VipService.expireAllDueVips();
-            PackageService.cleanupExpiredPendingVariants();
-        });
-
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "EasyVip-Expiration-Scheduler");
             thread.setDaemon(true);
             return thread;
         });
+
+        runOnServer(VipService::expireAllDueVips);
+        scheduler.execute(ExpirationService::cleanupPendingVariants);
 
         long interval = EasyVipConfig.common.autoExpireIntervalSeconds;
         if (interval < 5) {
@@ -40,14 +38,21 @@ public final class ExpirationService {
 
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                runOnServer(() -> {
-                    VipService.expireAllDueVips();
-                    PackageService.cleanupExpiredPendingVariants();
-                });
+                cleanupPendingVariants();
             } catch (Exception e) {
-                System.err.println("[EasyVip] Error in expiration scheduler tick: " + e.getMessage());
+                System.err.println("[EasyVip] Error in expiration scheduler tick: " + e.getClass().getSimpleName());
             }
+            runOnServer(VipService::expireAllDueVips);
         }, interval, interval, TimeUnit.SECONDS);
+    }
+
+    private static void cleanupPendingVariants() {
+        try {
+            PackageService.cleanupExpiredPendingVariants();
+        } catch (Throwable exception) {
+            System.err.println("[EasyVip] Pending variant cleanup failed: "
+                    + exception.getClass().getSimpleName());
+        }
     }
 
     public static synchronized void reload(Plugin plugin) {
