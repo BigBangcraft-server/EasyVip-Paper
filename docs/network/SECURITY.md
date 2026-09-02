@@ -19,6 +19,9 @@
   response bodies, JDBC messages, URLs, or stack traces that could carry secrets.
 * Keys use `SecureRandom`, are masked/fingerprinted in audit output, and are
   redeemed through SQL claims and unique constraints.
+* JSON compatibility key synchronization uses fixed lock stripes; confirmation
+  and command-throttle state use bounded Caffeine caches, so attacker-chosen
+  key/player identifiers cannot grow process memory without limit.
 * LuckPerms reconciliation touches only the `easyvip.managed.*` namespace.
 
 ## Deliberate boundaries

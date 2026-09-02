@@ -31,7 +31,9 @@ controls belong to GOAL 06 remain explicitly open.
 
 ## Risks verified in the current code
 
-* JVM-local locks do not coordinate multiple Paper instances.
+* JVM-local locks do not coordinate multiple Paper instances; the JSON fallback
+  uses bounded stripes only for local compatibility, while SQL mode is required
+  for distributed authority.
 * SQL credentials are held by a static manager; lifecycle and secret rotation
   remain operational concerns even though SQL connections now use HikariCP.
 * JSON mode still has mutable blob/read-modify-write paths; SQL mode uses the

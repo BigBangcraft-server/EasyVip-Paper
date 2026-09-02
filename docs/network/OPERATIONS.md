@@ -33,3 +33,6 @@ invoke `give_package` remain synchronous and should be migrated before
 latency-sensitive production use.
 WebStore player/challenge sync uses a bounded executor (256 queued tasks) and
 rejects excess work instead of expanding an unbounded common-pool backlog.
+JSON-mode key locks are fixed-size stripes, while confirmation and command
+throttle state are bounded caches; SQL mode remains required for distributed
+authority.

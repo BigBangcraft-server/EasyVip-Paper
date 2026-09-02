@@ -14,6 +14,8 @@ import br.com.pedrodalben.easyvip.platform.TextUtil;
 import br.com.pedrodalben.easyvip.util.DurationParser;
 import br.com.pedrodalben.easyvip.util.KeySecurity;
 import br.com.pedrodalben.easyvip.util.UniqueCodeGenerator;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -33,9 +35,18 @@ import java.util.function.Function;
 public final class KeyService {
     private static final DeliveryLedger DELIVERY_LEDGER = DeliveryLedger.sql();
 
-    private static final ConcurrentHashMap<UUID, PendingConfirmation> confirmations = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<UUID, Map<CommandThrottleType, Long>> commandCooldowns = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, Object> KEY_LOCKS = new ConcurrentHashMap<>();
+    private static final Cache<UUID, PendingConfirmation> confirmations = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .build();
+    private static final Cache<UUID, ConcurrentHashMap<CommandThrottleType, Long>> commandCooldowns = Caffeine.newBuilder()
+            .maximumSize(100_000)
+            .build();
+    // Bounded lock striping keeps JSON compatibility synchronization finite.
+    private static final Object[] KEY_LOCKS = new Object[256];
+
+    static {
+        Arrays.setAll(KEY_LOCKS, ignored -> new Object());
+    }
 
     private static final int MAX_GENERATION_ATTEMPTS = 1000;
 
@@ -231,9 +242,9 @@ public final class KeyService {
             return CompletableFuture.completedFuture(confirmPending(player));
         }
         UUID uuid = player.getUniqueId();
-        PendingConfirmation pending = confirmations.get(uuid);
+        PendingConfirmation pending = confirmations.getIfPresent(uuid);
         if (pending == null || pending.isExpired()) {
-            confirmations.remove(uuid);
+            confirmations.invalidate(uuid);
             return CompletableFuture.completedFuture(RedeemResult.INVALID_KEY);
         }
         return redeemKeyAsync(plugin, player, pending.code, true, CommandThrottleType.CONFIRM, true, null);
@@ -364,7 +375,7 @@ public final class KeyService {
             PersistenceManager.putKey(current);
         }
         if (applyCooldown) markCooldown(claim.uuid(), throttleType);
-        confirmations.remove(claim.uuid());
+        confirmations.invalidate(claim.uuid());
         PersistenceManager.log(claim.playerName(), "redeem_key",
                 "Redeemed key " + KeySecurity.describeKeyForLog(claim.code()));
         return RedeemResult.SUCCESS;
@@ -388,7 +399,7 @@ public final class KeyService {
             return redeemKeySql(player, code, uuid, playerName, throttleType, applyCooldown, physicalInstanceId);
         }
 
-        Object lock = KEY_LOCKS.computeIfAbsent(code, k -> new Object());
+        Object lock = keyLock(code);
         synchronized (lock) {
             KeyRecord record = PersistenceManager.getKey(code);
             RedeemResult preflight = preflightCheck(record, uuid, physicalInstanceId);
@@ -410,7 +421,7 @@ public final class KeyService {
             if (applyCooldown) {
                 markCooldown(uuid, throttleType);
             }
-            confirmations.remove(uuid);
+            confirmations.invalidate(uuid);
             PersistenceManager.log(playerName, "redeem_key", "Redeemed key "
                     + KeySecurity.describeKeyForLog(code));
             return RedeemResult.SUCCESS;
@@ -461,7 +472,7 @@ public final class KeyService {
             return RedeemResult.ERROR;
         }
         if (applyCooldown) markCooldown(uuid, throttleType);
-        confirmations.remove(uuid);
+        confirmations.invalidate(uuid);
         PersistenceManager.log(playerName, "redeem_key", "Redeemed key " + KeySecurity.describeKeyForLog(code));
         return RedeemResult.SUCCESS;
     }
@@ -725,9 +736,20 @@ public final class KeyService {
         }
 
         long now = System.currentTimeMillis();
-        Map<CommandThrottleType, Long> byType = commandCooldowns.computeIfAbsent(uuid, k -> new EnumMap<>(CommandThrottleType.class));
+        ConcurrentHashMap<CommandThrottleType, Long> byType = commandCooldowns.get(uuid,
+                ignored -> new ConcurrentHashMap<>());
         Long lastUsed = byType.get(throttleType);
-        return lastUsed != null && now - lastUsed < cooldownMs;
+        if (lastUsed == null) {
+            return false;
+        }
+        if (now - lastUsed >= cooldownMs) {
+            byType.remove(throttleType, lastUsed);
+            if (byType.isEmpty()) {
+                commandCooldowns.invalidate(uuid);
+            }
+            return false;
+        }
+        return true;
     }
 
     private static void markCooldown(UUID uuid, CommandThrottleType throttleType) {
@@ -735,7 +757,8 @@ public final class KeyService {
         if (cooldownMs <= 0) {
             return;
         }
-        Map<CommandThrottleType, Long> byType = commandCooldowns.computeIfAbsent(uuid, k -> new EnumMap<>(CommandThrottleType.class));
+        ConcurrentHashMap<CommandThrottleType, Long> byType = commandCooldowns.get(uuid,
+                ignored -> new ConcurrentHashMap<>());
         byType.put(throttleType, System.currentTimeMillis());
     }
 
@@ -761,9 +784,9 @@ public final class KeyService {
 
     public static RedeemResult confirmPending(Player player) {
         UUID uuid = player.getUniqueId();
-        PendingConfirmation pc = confirmations.get(uuid);
+        PendingConfirmation pc = confirmations.getIfPresent(uuid);
         if (pc == null || pc.isExpired()) {
-            confirmations.remove(uuid);
+            confirmations.invalidate(uuid);
             return RedeemResult.INVALID_KEY;
         }
         return redeemKey(player, pc.code, true, CommandThrottleType.CONFIRM, true, null);
@@ -866,7 +889,7 @@ public final class KeyService {
         }
 
         String code = record.getCode();
-        Object lock = KEY_LOCKS.computeIfAbsent(code, k -> new Object());
+        Object lock = keyLock(code);
         synchronized (lock) {
             KeyRecord current = PersistenceManager.getKey(code);
             if (current == null) {
@@ -975,5 +998,9 @@ public final class KeyService {
             return false;
         }
         return markerPresent && hasKeyValue;
+    }
+
+    private static Object keyLock(String code) {
+        return KEY_LOCKS[Math.floorMod(code.hashCode(), KEY_LOCKS.length)];
     }
 }
