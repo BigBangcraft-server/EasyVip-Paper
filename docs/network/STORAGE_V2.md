@@ -23,7 +23,7 @@ reconciliation until a later cleanup goal. Startup calls
 | Entitlements | `easyvip_entitlement_grants` | deterministic `grant_id`, status transition |
 | Active selection | `easyvip_player_preferences` | transaction with player snapshot |
 | Key redemption | `easyvip_key_redemptions` | key row lock + unique idempotency/physical key |
-| Package claims | `easyvip_package_claims` | unique `claim_key` + lease |
+| Package claims | `easyvip_package_claims` | unique `claim_key` + lease; cooldowns serialize on the `(player_uuid, package_id)` usage row |
 | Deliveries | `easyvip_deliveries` | unique idempotency key and lease fields |
 | Node heartbeat | `easyvip_network_nodes` | node primary key, heartbeat update |
 

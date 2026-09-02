@@ -132,6 +132,20 @@ class SqlConcurrencyTest {
     }
 
     @Test
+    void repeatablePackageCooldownHasOneConcurrentWinner() throws Exception {
+        UUID player = UUID.randomUUID();
+        long now = System.currentTimeMillis();
+        List<SqlDatabaseManager.PackageClaimResult> claims = race(2, (start, index) -> {
+            start.await();
+            return SqlDatabaseManager.claimPackage(player, "cooldown", true, 60_000L,
+                    "cooldown-race-" + runId + "-" + index, now, 10_000L);
+        });
+
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.CLAIMED).count());
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN).count());
+    }
+
+    @Test
     void concurrentVipWritersExposeOneCasConflict() throws Exception {
         UUID player = UUID.randomUUID();
         PlayerVipRegistry initial = new PlayerVipRegistry(player);

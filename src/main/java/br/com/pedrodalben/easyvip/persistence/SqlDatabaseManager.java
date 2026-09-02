@@ -1554,7 +1554,8 @@ public final class SqlDatabaseManager {
                 return new PackageClaimResult(PackageClaimStatus.ALREADY_CLAIMED, existing.claimId());
             }
             if (repeatable && cooldownMillis > 0) {
-                Long lastClaim = latestPackageClaim(conn, playerUuid, packageId);
+                lockPackageCooldown(conn, playerUuid, packageId);
+                Long lastClaim = latestPackageClaim(conn, playerUuid, packageId, now);
                 if (lastClaim != null && now - lastClaim < cooldownMillis) {
                     conn.rollback();
                     return new PackageClaimResult(PackageClaimStatus.COOLDOWN, null);
@@ -1656,17 +1657,47 @@ public final class SqlDatabaseManager {
         }
     }
 
-    private static Long latestPackageClaim(Connection conn, UUID playerUuid, String packageId) throws SQLException {
+    private static void lockPackageCooldown(Connection conn, UUID playerUuid, String packageId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "UPDATE easyvip_package_usage SET usage_count = usage_count WHERE player_uuid = ? AND package_id = ?")) {
+            ps.setString(1, playerUuid.toString());
+            ps.setString(2, packageId);
+            if (ps.executeUpdate() == 0) {
+                try (PreparedStatement insert = conn.prepareStatement(
+                        "INSERT INTO easyvip_package_usage (player_uuid, package_id, usage_count) VALUES (?, ?, 0)")) {
+                    insert.setString(1, playerUuid.toString());
+                    insert.setString(2, packageId);
+                    try {
+                        insert.executeUpdate();
+                    } catch (SQLException e) {
+                        if (!isDuplicateKeyError(e)) throw e;
+                    }
+                }
+            }
+        }
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT usage_count FROM easyvip_package_usage WHERE player_uuid = ? AND package_id = ? FOR UPDATE")) {
+            ps.setString(1, playerUuid.toString());
+            ps.setString(2, packageId);
+            ps.executeQuery().close();
+        }
+    }
+
+    private static Long latestPackageClaim(Connection conn, UUID playerUuid, String packageId, long now) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("""
-                SELECT MAX(claimed_at) FROM easyvip_package_claims
-                WHERE player_uuid = ? AND package_id = ? AND status = 'COMPLETE'
+                SELECT claimed_at FROM easyvip_package_claims
+                WHERE player_uuid = ? AND package_id = ?
+                  AND (status = 'COMPLETE' OR (status = 'CLAIMED' AND lease_expires_at >= ?))
+                ORDER BY claimed_at DESC
+                LIMIT 1
+                FOR UPDATE
                 """)) {
             ps.setString(1, playerUuid.toString());
             ps.setString(2, packageId);
+            ps.setLong(3, now);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return null;
-                long value = rs.getLong(1);
-                return rs.wasNull() ? null : value;
+                return rs.getLong(1);
             }
         }
     }
