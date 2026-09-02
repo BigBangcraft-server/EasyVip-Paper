@@ -154,6 +154,11 @@ public final class WebStoreFulfillmentService {
                 + (lastErrorCode != null ? " error=" + lastErrorCode : "");
     }
 
+    /** Keeps the SQL health probe out of a synchronous Paper command thread. */
+    public static java.util.concurrent.CompletableFuture<String> statusSummaryAsync() {
+        return PersistenceManager.executeAsync(WebStoreFulfillmentService::statusSummary);
+    }
+
     public static void pollNowForTest() {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (IN_FLIGHT.get() && System.nanoTime() < deadline) {

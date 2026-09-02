@@ -959,6 +959,34 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 + " §8| §f" + EasyVipConfig.localized("used", "usado") + " " + key.getUsedCount() + "/" + key.getMaxUses());
     }
 
+    private void sendAudit(CommandSender sender, List<AuditLogRecord> logs, int page, Throwable error) {
+        if (error != null) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "Unable to load audit logs.", "Não foi possível carregar o log de auditoria."));
+            return;
+        }
+        if (logs == null || logs.isEmpty()) {
+            TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No audit log entries found.", "Nenhum log de auditoria encontrado."));
+            return;
+        }
+        int perPage = 10;
+        List<AuditLogRecord> ordered = new ArrayList<>(logs);
+        Collections.reverse(ordered);
+        int totalPages = Math.max(1, (int) Math.ceil(ordered.size() / (double) perPage));
+        int currentPage = Math.min(page, totalPages);
+        int fromIndex = (currentPage - 1) * perPage;
+        int toIndex = Math.min(fromIndex + perPage, ordered.size());
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
+        TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("Audit log", "Audit log") + " §7(" + EasyVipConfig.localized("page", "página") + " " + currentPage + "/" + totalPages + ", " + ordered.size() + " " + EasyVipConfig.localized("entries", "entradas") + ")");
+        for (int i = fromIndex; i < toIndex; i++) {
+            AuditLogRecord record = ordered.get(i);
+            String timestamp = formatter.format(Instant.ofEpochMilli(record.getTimestamp()));
+            String details = KeySecurity.sanitizeAuditDetails(record.getDetails());
+            if (details == null) details = "";
+            TextUtil.sendMessage(sender, String.format("§7- §f%s §8| §e%s §8| §a%s §8| §7%s", timestamp, record.getOperator(), record.getAction(), details));
+        }
+    }
+
     private boolean handlePackage(CommandSender sender, List<String> args) {
         if (args.isEmpty()) {
             TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip package <list|info>", "Uso: /easyvip package <list|info>"));
@@ -1159,38 +1187,27 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     } catch (NumberFormatException ignored) {
                     }
                 }
-                List<AuditLogRecord> logs = PersistenceManager.getAuditLogs();
-                if (logs.isEmpty()) {
-                    TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No audit log entries found.", "Nenhum log de auditoria encontrado."));
-                    return true;
-                }
-
-                int perPage = 10;
-                List<AuditLogRecord> ordered = new ArrayList<>(logs);
-                Collections.reverse(ordered);
-
-                int totalPages = Math.max(1, (int) Math.ceil(ordered.size() / (double) perPage));
-                int currentPage = Math.min(page, totalPages);
-                int fromIndex = (currentPage - 1) * perPage;
-                int toIndex = Math.min(fromIndex + perPage, ordered.size());
-
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
-                TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("Audit log", "Audit log") + " §7(" + EasyVipConfig.localized("page", "página") + " " + currentPage + "/" + totalPages + ", " + ordered.size() + " " + EasyVipConfig.localized("entries", "entradas") + ")");
-
-                for (int i = fromIndex; i < toIndex; i++) {
-                    AuditLogRecord record = ordered.get(i);
-                    String timestamp = formatter.format(Instant.ofEpochMilli(record.getTimestamp()));
-                    String details = KeySecurity.sanitizeAuditDetails(record.getDetails());
-                    if (details == null) details = "";
-                    TextUtil.sendMessage(sender, String.format("§7- §f%s §8| §e%s §8| §a%s §8| §7%s", timestamp, record.getOperator(), record.getAction(), details));
+                if (plugin != null) {
+                    final int requestedPage = page;
+                    PersistenceManager.executeAsync(PersistenceManager::getAuditLogs).whenComplete((logs, error) ->
+                            runOnServer(() -> sendAudit(sender, logs, requestedPage, error)));
+                } else {
+                    sendAudit(sender, PersistenceManager.getAuditLogs(), page, null);
                 }
                 return true;
             }
 
             case "webstore": {
                 if (args.size() > 1 && args.get(1).equalsIgnoreCase("status")) {
-                    String status = WebStoreFulfillmentService.statusSummary();
-                    TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("WebStore fulfillment status:", "Status do fulfillment da WebStore:") + " §f" + status);
+                    if (plugin != null) {
+                        WebStoreFulfillmentService.statusSummaryAsync().whenComplete((status, error) -> runOnServer(() ->
+                                TextUtil.sendMessage(sender, error == null
+                                        ? "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("WebStore fulfillment status:", "Status do fulfillment da WebStore:") + " §f" + status
+                                        : "§c" + EasyVipConfig.localized("Unable to load WebStore status.", "Não foi possível carregar o status da WebStore."))));
+                    } else {
+                        String status = WebStoreFulfillmentService.statusSummary();
+                        TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("WebStore fulfillment status:", "Status do fulfillment da WebStore:") + " §f" + status);
+                    }
                     return true;
                 }
                 TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip admin webstore status", "Uso: /easyvip admin webstore status"));
@@ -1387,12 +1404,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
 
-                KeyRecord record = KeyService.generateVipKey(tier, duration, maxUses, boundUuid, -1, null);
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Key generated successfully: ", "Chave gerada com sucesso: ")
-                        + "§e" + record.getCode()
-                        + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
-                        + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
-                return true;
+                final int generatedMaxUses = maxUses;
+                final UUID generatedBoundUuid = boundUuid;
+                final String generatedBoundDisplay = boundDisplay;
+                return generateKey(sender,
+                        () -> KeyService.generateVipKey(tier, duration, generatedMaxUses, generatedBoundUuid, -1, null),
+                        "Key generated successfully: ", "Chave gerada com sucesso: ", generatedMaxUses, generatedBoundDisplay);
             }
 
             case "reward": {
@@ -1417,12 +1434,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
 
-                KeyRecord record = KeyService.generateRewardKey(rkId, maxUses, boundUuid, -1, null);
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Key generated successfully: ", "Chave gerada com sucesso: ")
-                        + "§e" + record.getCode()
-                        + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
-                        + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
-                return true;
+                final int generatedMaxUses = maxUses;
+                final UUID generatedBoundUuid = boundUuid;
+                final String generatedBoundDisplay = boundDisplay;
+                return generateKey(sender,
+                        () -> KeyService.generateRewardKey(rkId, generatedMaxUses, generatedBoundUuid, -1, null),
+                        "Key generated successfully: ", "Chave gerada com sucesso: ", generatedMaxUses, generatedBoundDisplay);
             }
 
             case "command": {
@@ -1455,12 +1472,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 action.put("command", commandStr);
                 actions.add(action);
 
-                KeyRecord record = KeyService.generateCustomKey(actions, maxUses, boundUuid, -1);
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Command key generated successfully: ", "Chave de comando gerada com sucesso: ")
-                        + "§e" + record.getCode()
-                        + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
-                        + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
-                return true;
+                final int generatedMaxUses = maxUses;
+                final UUID generatedBoundUuid = boundUuid;
+                final String generatedBoundDisplay = boundDisplay;
+                return generateKey(sender,
+                        () -> KeyService.generateCustomKey(actions, generatedMaxUses, generatedBoundUuid, -1),
+                        "Command key generated successfully: ", "Chave de comando gerada com sucesso: ", generatedMaxUses, generatedBoundDisplay);
             }
 
             case "item": {
@@ -1488,12 +1505,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 action.put("amount", amount);
                 actions.add(action);
 
-                KeyRecord record = KeyService.generateCustomKey(actions, maxUses, boundUuid, -1);
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Item key generated successfully: ", "Chave de item gerada com sucesso: ")
-                        + "§e" + record.getCode()
-                        + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
-                        + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
-                return true;
+                final int generatedMaxUses = maxUses;
+                final UUID generatedBoundUuid = boundUuid;
+                final String generatedBoundDisplay = boundDisplay;
+                return generateKey(sender,
+                        () -> KeyService.generateCustomKey(actions, generatedMaxUses, generatedBoundUuid, -1),
+                        "Item key generated successfully: ", "Chave de item gerada com sucesso: ", generatedMaxUses, generatedBoundDisplay);
             }
 
             case "itemstack": {
@@ -1527,12 +1544,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 action.put("stack_snbt", stackStr);
                 actions.add(action);
 
-                KeyRecord record = KeyService.generateCustomKey(actions, maxUses, boundUuid, -1);
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("ItemStack key generated successfully: ", "Chave de itemstack gerada com sucesso: ")
-                        + "§e" + record.getCode()
-                        + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
-                        + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
-                return true;
+                final int generatedMaxUses = maxUses;
+                final UUID generatedBoundUuid = boundUuid;
+                final String generatedBoundDisplay = boundDisplay;
+                return generateKey(sender,
+                        () -> KeyService.generateCustomKey(actions, generatedMaxUses, generatedBoundUuid, -1),
+                        "ItemStack key generated successfully: ", "Chave de itemstack gerada com sucesso: ", generatedMaxUses, generatedBoundDisplay);
             }
 
             case "custom": {
@@ -1573,15 +1590,41 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
 
-                KeyRecord record = KeyService.generateCustomKey(actions, maxUses, boundUuid, -1);
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Custom action key generated successfully: ", "Chave de ações personalizadas gerada com sucesso: ")
-                        + "§e" + record.getCode()
-                        + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
-                        + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
-                return true;
+                final int generatedMaxUses = maxUses;
+                final UUID generatedBoundUuid = boundUuid;
+                final String generatedBoundDisplay = boundDisplay;
+                return generateKey(sender,
+                        () -> KeyService.generateCustomKey(actions, generatedMaxUses, generatedBoundUuid, -1),
+                        "Custom action key generated successfully: ", "Chave de ações personalizadas gerada com sucesso: ", generatedMaxUses, generatedBoundDisplay);
             }
         }
         return true;
+    }
+
+    private boolean generateKey(CommandSender sender, java.util.function.Supplier<KeyRecord> generator,
+                                String englishLabel, String portugueseLabel, int maxUses,
+                                String boundDisplay) {
+        if (plugin == null) {
+            sendGeneratedKey(sender, generator.get(), englishLabel, portugueseLabel, maxUses, boundDisplay);
+            return true;
+        }
+        PersistenceManager.executeAsync(generator).whenComplete((record, error) -> runOnServer(() -> {
+            if (error != null || record == null) {
+                TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                        "Key generation failed.", "Falha ao gerar a chave."));
+                return;
+            }
+            sendGeneratedKey(sender, record, englishLabel, portugueseLabel, maxUses, boundDisplay);
+        }));
+        return true;
+    }
+
+    private void sendGeneratedKey(CommandSender sender, KeyRecord record, String englishLabel,
+                                  String portugueseLabel, int maxUses, String boundDisplay) {
+        TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized(englishLabel, portugueseLabel)
+                + "§e" + record.getCode()
+                + " §a(" + EasyVipConfig.localized("Uses", "Usos") + ": §f" + maxUses
+                + "§a, " + EasyVipConfig.localized("Player", "Jogador") + ": §f" + boundDisplay + "§a)");
     }
 
     private boolean executeLink(CommandSender sender) {
