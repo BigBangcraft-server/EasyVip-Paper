@@ -176,6 +176,20 @@ class SqlConcurrencyTest {
     }
 
     @Test
+    void unavailableDataSourceFailsClosed() {
+        UUID player = UUID.randomUUID();
+        PlayerVipRegistry registry = new PlayerVipRegistry(player);
+        registry.getVips().put("vip", new PlayerVipRecord("vip", 1L, 2L, true, false));
+        SqlDatabaseManager.updatePlayerVips(player, registry);
+
+        SqlDatabaseManager.shutdown();
+
+        assertFalse(SqlDatabaseManager.healthSnapshot().healthy());
+        assertFalse(SqlDatabaseManager.transitionEntitlementExpired(player, "vip", 1L,
+                System.currentTimeMillis()));
+    }
+
+    @Test
     void duplicateIdempotencyRollbackAndRestartAreObservable() {
         UUID player = UUID.randomUUID();
         KeyRecord key = new KeyRecord();
