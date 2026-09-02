@@ -23,12 +23,13 @@ network foundation one bounded goal at a time.
 5. Added pooled-connection concurrency tests; H2 and MySQL 8.4 are covered,
    while the MariaDB lab remains a compatibility gate.
 
-## GOAL 03 — entitlement engine
+## GOAL 03 — entitlement engine (implemented)
 
-* Map legacy tiers to grants and benefits.
-* Add a core service implementation of `EasyVipApi` backed by storage.
-* Define capability configuration and classification (cosmetic/convenience/etc.).
-* Add compatibility projection for current tier behavior.
+* Map legacy tiers and player records to temporal grants and typed benefits.
+* Add the pure-JDK `ConfiguredEntitlementService` implementation of `EasyVipApi`.
+* Define TOML capability configuration, scopes, deterministic merge rules, and cosmetic/convenience classification.
+* Add the Paper getter and compatibility projection without changing tier commands or activation.
+* Add API/core/bridge tests and plugin usage documentation.
 
 ## GOAL 04 — events/cache
 
@@ -50,7 +51,8 @@ network foundation one bounded goal at a time.
 
 ## Exit criteria for the next goal
 
-Do not start GOAL 03 until the GOAL 02 focused and full suites are green and a
-supported MySQL/MariaDB run is recorded. Do not call the network ready until
-the acceptance criteria in the program brief have authoritative concurrency,
-outage, and migration evidence.
+GOAL 03 is complete when the focused and full local suites are green and the
+API/core/bridge documentation is published. Do not call the network ready
+until the acceptance criteria in the program brief have authoritative
+concurrency, outage, and migration evidence. GOAL 04 starts only by explicit
+instruction.

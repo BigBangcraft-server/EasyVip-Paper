@@ -1,6 +1,6 @@
 # EasyVip Network Architecture
 
-Status: GOAL 02 storage V2, Paper API `26.2.build.121-stable`, Java 25.
+Status: GOAL 03 entitlement engine, Paper API `26.2.build.121-stable`, Java 25.
 
 ## Audit of the current HEAD
 
@@ -51,6 +51,9 @@ Storage V2 transition on top of the Paper 26.2 upgrade.
   elects one database winner before local lifecycle actions run.
 * Web-store fulfillment already has transactional staging/claim fields and
   HMAC/replay checks; it remains an adapter until storage V2.
+* `ConfiguredEntitlementService` resolves active `Grant` records into typed
+  capabilities; `LegacyVipCapabilityBridge` projects current tiers without
+  changing activation semantics.
 
 ### Dependency direction after this goal
 
@@ -81,9 +84,9 @@ shuffle while the existing plugin remains production-facing.
 * `easyvip-paper` and `easyvip-velocity` own platform adapters and scheduling.
 * Redis is an event/cache adapter, never authoritative persistence.
 
-The current API contracts provide the first extraction seam: callers ask for a
-capability in a `ScopeContext`, not for a tier name. The resolver is deterministic
-and testable without a server runtime.
+The current API contracts provide the extraction seam: callers ask for a
+capability in a `ScopeContext`, not for a tier name. The resolver and temporal
+grant evaluation are deterministic and testable without a server runtime.
 
 ## 26.2 compatibility
 

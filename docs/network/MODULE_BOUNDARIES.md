@@ -6,7 +6,8 @@
 plugin consumers. It contains:
 
 * `EasyVipApi`, `EntitlementService`, and `BenefitService` interfaces;
-* immutable `PlayerEntitlementView`, `CapabilityValue`, `CapabilityGrant`, and
+* immutable `PlayerEntitlementView`, `EffectiveEntitlementView`, `Capability`,
+  `Benefit`, `Entitlement`, `Grant`, `CapabilityValue`, `CapabilityGrant`, and
   `DefaultCapabilityResolver` domain types;
 * `Scope`, `ScopeType`, `ScopeContext`, and `NetworkNodeIdentity`;
 * versioned `DomainEvent`/`DomainEventType` envelopes.

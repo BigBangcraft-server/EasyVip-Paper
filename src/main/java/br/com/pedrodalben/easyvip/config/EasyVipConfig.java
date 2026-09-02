@@ -385,12 +385,25 @@ public final class EasyVipConfig {
         public String color = "white";
         public final VipMessagesConfig messages = new VipMessagesConfig();
         public final VipCommandsConfig commands = new VipCommandsConfig();
+        public final Map<String, VipBenefitDefinition> benefits = new LinkedHashMap<>();
         public final List<VipActivationItemDefinition> activationItems = new ArrayList<>();
         public List<Map<String, Object>> actionsOnActivate = new ArrayList<>();
         public List<Map<String, Object>> actionsOnExpire = new ArrayList<>();
         public List<Map<String, Object>> actionsOnRemove = new ArrayList<>();
         public List<Map<String, Object>> actionsOnSetActive = new ArrayList<>();
         public List<Map<String, Object>> actionsOnUnsetActive = new ArrayList<>();
+    }
+
+    /** Typed, scope-aware capability configured under a legacy VIP tier. */
+    public static class VipBenefitDefinition {
+        public String id;
+        public String capability;
+        public String type = "BOOLEAN";
+        public Object value = Boolean.TRUE;
+        public String classification = "CONVENIENCE";
+        public String scope = "network";
+        public String merge = "HIGHEST_PRIORITY";
+        public int priority;
     }
 
     private static void loadTiers() throws IllegalArgumentException, IOException {
@@ -493,9 +506,10 @@ public final class EasyVipConfig {
             Map<String, Object> commandsData = asMap(vipData.get("commands"));
             if (commandsData != null) {
                 def.commands.activate = getStringList(commandsData, "activate", def.commands.activate);
-                def.commands.expire = getStringList(commandsData, "expire", def.commands.expire);
+            def.commands.expire = getStringList(commandsData, "expire", def.commands.expire);
             }
 
+            def.benefits.putAll(parseBenefits(vipData.get("benefits")));
             def.activationItems.addAll(parseActivationItems(vipData.get("activation_items")));
 
             def.actionsOnActivate = getActionList(vipData, "actions_on_activate");
@@ -531,6 +545,7 @@ public final class EasyVipConfig {
             def.activationMode = getString(tierData, "activation_mode", tiers.defaults.activationMode);
             def.maxStackDurationSeconds = getLong(tierData, "max_stack_duration_seconds", 0);
             def.color = getString(tierData, "color", "white");
+            def.benefits.putAll(parseBenefits(tierData.get("benefits")));
             def.actionsOnActivate = getActionList(tierData, "actions_on_activate");
             def.actionsOnExpire = getActionList(tierData, "actions_on_expire");
             def.actionsOnRemove = getActionList(tierData, "actions_on_remove");
@@ -749,6 +764,10 @@ public final class EasyVipConfig {
             tier.put("color", def.color);
         }
 
+        if (def.benefits != null && !def.benefits.isEmpty()) {
+            tier.put("benefits", buildBenefitsToml(def.benefits));
+        }
+
         Map<String, Object> messagesMap = new LinkedHashMap<>();
         if (def.messages != null) {
             if (def.messages.activated != null && !def.messages.activated.isEmpty() && !def.messages.activated.equals(tiers.defaults.messages.activated)) {
@@ -795,6 +814,28 @@ public final class EasyVipConfig {
         }
 
         return tier;
+    }
+
+    private static Map<String, Object> buildBenefitsToml(Map<String, VipBenefitDefinition> benefits) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, VipBenefitDefinition> entry : benefits.entrySet()) {
+            VipBenefitDefinition benefit = entry.getValue();
+            if (benefit == null) {
+                continue;
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("capability", benefit.capability);
+            data.put("type", benefit.type);
+            data.put("value", benefit.value);
+            data.put("classification", benefit.classification);
+            data.put("scope", benefit.scope);
+            data.put("merge", benefit.merge);
+            if (benefit.priority != 0) {
+                data.put("priority", benefit.priority);
+            }
+            result.put(entry.getKey(), data);
+        }
+        return result;
     }
 
     private static Map<String, Object> buildActivationItemsToml(List<VipActivationItemDefinition> activationItems) {
@@ -1327,6 +1368,39 @@ public final class EasyVipConfig {
                     ));
                 }
             }
+            for (Map.Entry<String, VipBenefitDefinition> entry : tier.benefits.entrySet()) {
+                VipBenefitDefinition benefit = entry.getValue();
+                String benefitId = entry.getKey();
+                if (benefit == null || benefitId == null || benefitId.isBlank()) {
+                    errors.add("tiers.toml: tier " + tier.id + " has an invalid benefit id.");
+                    continue;
+                }
+                if (benefit.capability == null || benefit.capability.isBlank()) {
+                    errors.add("tiers.toml: benefit " + benefitId + " in tier " + tier.id + " needs a capability.");
+                }
+                String type = benefit.type == null ? "" : benefit.type.toUpperCase(Locale.ROOT);
+                if (!Set.of("BOOLEAN", "INTEGER", "DECIMAL", "STRING", "STRING_LIST").contains(type)) {
+                    errors.add("tiers.toml: benefit " + benefitId + " in tier " + tier.id + " has invalid type " + benefit.type + ".");
+                } else if (!validBenefitValue(type, benefit.value)) {
+                    errors.add("tiers.toml: benefit " + benefitId + " in tier " + tier.id + " has an invalid value for " + type + ".");
+                }
+                if (!validBenefitScope(benefit.scope)) {
+                    errors.add("tiers.toml: benefit " + benefitId + " in tier " + tier.id + " has invalid scope " + benefit.scope + ".");
+                }
+                if (!Set.of("OR", "MAX", "HIGHEST_PRIORITY").contains(benefit.merge == null ? "" : benefit.merge.toUpperCase(Locale.ROOT))) {
+                    errors.add("tiers.toml: benefit " + benefitId + " in tier " + tier.id + " has invalid merge strategy " + benefit.merge + ".");
+                }
+                String merge = benefit.merge == null ? "" : benefit.merge.toUpperCase(Locale.ROOT);
+                if ("OR".equals(merge) && !"BOOLEAN".equals(type)) {
+                    errors.add("tiers.toml: OR benefit " + benefitId + " in tier " + tier.id + " must be BOOLEAN.");
+                }
+                if ("MAX".equals(merge) && !Set.of("INTEGER", "DECIMAL").contains(type)) {
+                    errors.add("tiers.toml: MAX benefit " + benefitId + " in tier " + tier.id + " must be INTEGER or DECIMAL.");
+                }
+                if (!Set.of("COSMETIC", "CONVENIENCE").contains(benefit.classification == null ? "" : benefit.classification.toUpperCase(Locale.ROOT))) {
+                    errors.add("tiers.toml: benefit " + benefitId + " in tier " + tier.id + " has invalid classification " + benefit.classification + ".");
+                }
+            }
         }
         for (PackageDefinition pkg : packages.list.values()) {
             if (pkg.id == null || pkg.id.trim().isEmpty()) {
@@ -1392,6 +1466,27 @@ public final class EasyVipConfig {
             }
         }
         return errors;
+    }
+
+    private static boolean validBenefitValue(String type, Object value) {
+        if (value == null) return false;
+        return switch (type) {
+            case "BOOLEAN" -> value instanceof Boolean;
+            case "INTEGER" -> value instanceof Number && ((Number) value).doubleValue() == ((Number) value).intValue();
+            case "DECIMAL" -> value instanceof Number || value instanceof String;
+            case "STRING" -> value instanceof String;
+            case "STRING_LIST" -> value instanceof List<?> list && list.stream().allMatch(String.class::isInstance);
+            default -> false;
+        };
+    }
+
+    private static boolean validBenefitScope(String scope) {
+        if (scope == null || scope.isBlank()) return false;
+        String normalized = scope.trim().toLowerCase(Locale.ROOT);
+        if ("network".equals(normalized)) return true;
+        int separator = normalized.indexOf(':');
+        return separator > 0 && separator < normalized.length() - 1
+                && Set.of("group", "node", "tag", "environment").contains(normalized.substring(0, separator));
     }
 
     public static String localized(String enUs, String ptBr) {
@@ -1622,6 +1717,31 @@ public final class EasyVipConfig {
         }
 
         return items;
+    }
+
+    private static Map<String, VipBenefitDefinition> parseBenefits(Object obj) {
+        Map<String, VipBenefitDefinition> benefits = new LinkedHashMap<>();
+        Map<String, Object> benefitData = asMap(obj);
+        if (benefitData == null) {
+            return benefits;
+        }
+        for (Map.Entry<String, Object> entry : benefitData.entrySet()) {
+            Map<String, Object> data = asMap(entry.getValue());
+            if (data == null) {
+                continue;
+            }
+            VipBenefitDefinition benefit = new VipBenefitDefinition();
+            benefit.id = entry.getKey();
+            benefit.capability = getString(data, "capability", "");
+            benefit.type = getString(data, "type", benefit.type).toUpperCase(Locale.ROOT);
+            benefit.value = data.containsKey("value") ? data.get("value") : benefit.value;
+            benefit.classification = getString(data, "classification", benefit.classification).toUpperCase(Locale.ROOT);
+            benefit.scope = getString(data, "scope", benefit.scope);
+            benefit.merge = getString(data, "merge", benefit.merge).toUpperCase(Locale.ROOT);
+            benefit.priority = getInt(data, "priority", benefit.priority);
+            benefits.put(benefit.id, benefit);
+        }
+        return benefits;
     }
 
     private static double getDouble(Map<String, Object> map, String key, double def) {

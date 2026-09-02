@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.List;
 
 /** Immutable, already-resolved capability view for one player and node context. */
 public final class PlayerEntitlementView {
@@ -41,6 +42,10 @@ public final class PlayerEntitlementView {
 
     public String getString(String capability, String defaultValue) {
         return get(capability).map(CapabilityValue::asString).orElse(defaultValue);
+    }
+
+    public List<String> getStrings(String capability, List<String> defaultValue) {
+        return get(capability).map(CapabilityValue::asStrings).orElse(defaultValue);
     }
 
     private static String normalize(String capability) {

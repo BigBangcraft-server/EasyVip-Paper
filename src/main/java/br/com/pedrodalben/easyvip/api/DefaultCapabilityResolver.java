@@ -38,6 +38,9 @@ public final class DefaultCapabilityResolver implements CapabilityResolver {
         ordered.sort(Comparator.comparingInt(CapabilityGrant::priority).reversed()
                 .thenComparing(CapabilityGrant::grantId));
         CapabilityGrant first = ordered.getFirst();
+        if (ordered.stream().anyMatch(grant -> grant.mergeStrategy() != first.mergeStrategy())) {
+            throw new IllegalArgumentException("Mixed merge strategies for capability " + capability);
+        }
 
         return switch (first.mergeStrategy()) {
             case HIGHEST_PRIORITY -> first.value();

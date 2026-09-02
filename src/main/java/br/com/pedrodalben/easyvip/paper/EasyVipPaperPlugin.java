@@ -1,9 +1,11 @@
 package br.com.pedrodalben.easyvip.paper;
 
 import br.com.pedrodalben.easyvip.action.ActionExecutor;
+import br.com.pedrodalben.easyvip.api.EasyVipApi;
 import br.com.pedrodalben.easyvip.command.EasyVipCommandHandler;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.listener.PlayerListener;
+import br.com.pedrodalben.easyvip.network.LegacyVipCapabilityBridge;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
 import br.com.pedrodalben.easyvip.platform.PaperPlatformBridge;
 import br.com.pedrodalben.easyvip.platform.PermissionBridge;
@@ -17,13 +19,23 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
+import java.time.Clock;
 
 public final class EasyVipPaperPlugin extends JavaPlugin {
 
     private static EasyVipPaperPlugin instance;
+    private EasyVipApi easyVipApi;
 
     public static EasyVipPaperPlugin getInstance() {
         return instance;
+    }
+
+    /** Platform entry point for other plugins; the API itself has no Paper dependency. */
+    public EasyVipApi getEasyVipApi() {
+        if (easyVipApi == null) {
+            throw new IllegalStateException("EasyVip is not enabled");
+        }
+        return easyVipApi;
     }
 
     @Override
@@ -43,6 +55,14 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         try {
             EasyVipConfig.initialize(dataDir);
             EasyVipConfig.loadAll();
+            java.util.List<String> configErrors = EasyVipConfig.validate();
+            if (!configErrors.isEmpty()) {
+                for (String error : configErrors) {
+                    getLogger().severe(error);
+                }
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
             getLogger().info("Configurations loaded: " + EasyVipConfig.tiers.list.size() + " tiers, "
                     + EasyVipConfig.packages.list.size() + " packages, "
                     + EasyVipConfig.rewardKeys.list.size() + " reward keys.");
@@ -64,6 +84,11 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
+
+        easyVipApi = LegacyVipCapabilityBridge.create(
+                () -> EasyVipConfig.tiers.list,
+                PersistenceManager::getPlayerVips,
+                Clock.systemUTC());
 
         // 3. Setup bridges
         ActionExecutor.setPlatform(new PaperPlatformBridge());
@@ -108,6 +133,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         ExpirationService.stop();
         PersistenceManager.shutdown();
 
+        easyVipApi = null;
         instance = null;
         getLogger().info("EasyVip disabled cleanly. Goodbye!");
     }
