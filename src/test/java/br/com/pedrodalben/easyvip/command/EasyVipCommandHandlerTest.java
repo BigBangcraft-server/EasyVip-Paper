@@ -64,6 +64,7 @@ class EasyVipCommandHandlerTest {
         assertNotNull(completions);
         assertTrue(completions.contains("use"));
         assertTrue(completions.contains("admin"));
+        assertTrue(completions.contains("network"));
         assertTrue(completions.contains("createvip"));
         assertTrue(completions.contains("select"));
     }
@@ -78,5 +79,16 @@ class EasyVipCommandHandlerTest {
         assertNotNull(completions);
         assertTrue(completions.contains("admin"));
         assertFalse(completions.contains("use"));
+    }
+
+    @Test
+    void networkDiagnosticsRequireAdminPermission() {
+        Player player = mock(Player.class);
+        when(player.hasPermission("easyvip.use")).thenReturn(true);
+        when(player.hasPermission("easyvip.admin")).thenReturn(false);
+        when(player.isOp()).thenReturn(false);
+
+        assertTrue(handler.onCommand(player, mockCommand, "easyvip", new String[]{"network", "status"}));
+        verify(player).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
 }

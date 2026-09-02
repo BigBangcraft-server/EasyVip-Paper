@@ -172,6 +172,10 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 if (!checkPermission(sender, "easyvip.admin")) return true;
                 return handleAdmin(sender, args.subList(1, args.size()));
 
+            case "network":
+                if (!checkPermission(sender, "easyvip.admin")) return true;
+                return handleNetworkDiagnostics(sender, args.subList(1, args.size()));
+
             default:
                 TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Unknown subcommand. Use /easyvip for help.", "Subcomando desconhecido. Use /easyvip para ajuda."));
                 return true;
@@ -199,6 +203,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         if (PermissionBridge.hasPermission(sender, "easyvip.admin")) {
             TextUtil.sendMessage(sender, "§7- §f/easyvip admin ... §8- §7" + EasyVipConfig.localized("administrative commands", "comandos administrativos"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip admin webstore status §8- §7" + EasyVipConfig.localized("fulfillment state", "estado do fulfillment"));
+            TextUtil.sendMessage(sender, "§7- §f/easyvip network status §8- §7" + EasyVipConfig.localized("DB/Redis/cache/delivery health", "saúde de DB/Redis/cache/delivery"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip admin network status §8- §7" + EasyVipConfig.localized("DB/Redis/cache/delivery health", "saúde de DB/Redis/cache/delivery"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip createvip <id> <display_name> [color] §8- §7" + EasyVipConfig.localized("create a new VIP definition", "criar uma nova definição de VIP"));
             TextUtil.sendMessage(sender, "§7- §f/easyvip key ... §8- §7" + EasyVipConfig.localized("manage keys", "gerenciar chaves"));
@@ -1396,7 +1401,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         if (args.length == 1) {
             List<String> base = new ArrayList<>(List.of("use", "confirm", "info", "time", "select", "variant", "help"));
             if (PermissionBridge.hasPermission(sender, "easyvip.admin")) {
-                base.addAll(List.of("admin", "createvip", "savevipactivation", "active", "key", "package", "reload", "config"));
+                base.addAll(List.of("admin", "network", "createvip", "savevipactivation", "active", "key", "package", "reload", "config"));
             }
             return filterMatches(base, args[0]);
         }
@@ -1405,6 +1410,13 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
 
         if (sub.equals("select")) {
             return filterMatches(new ArrayList<>(EasyVipConfig.tiers.list.keySet()), args[1]);
+        }
+
+        if (sub.equals("network")) {
+            if (args.length == 2 && PermissionBridge.hasPermission(sender, "easyvip.admin")) {
+                return filterMatches(List.of("status", "nodes", "cache", "redis", "database", "deliveries"), args[1]);
+            }
+            return Collections.emptyList();
         }
 
         if (sub.equals("info") || sub.equals("time")) {
@@ -1487,6 +1499,9 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             }
             if (adminSub.equals("webstore")) {
                 if (args.length == 3) return filterMatches(List.of("status"), args[2]);
+            }
+            if (adminSub.equals("network")) {
+                if (args.length == 3) return filterMatches(List.of("status", "nodes", "cache", "redis", "database", "deliveries"), args[2]);
             }
             if (adminSub.equals("generate")) {
                 if (args.length == 3) return filterMatches(List.of("vip", "reward", "command", "item", "itemstack", "custom"), args[2]);

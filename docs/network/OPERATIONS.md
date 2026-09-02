@@ -2,10 +2,11 @@
 
 ## Diagnostics
 
-Paper administrators can run `/easyvip admin network status` (or the narrower
-`cache`, `redis`, `database`, `deliveries`, and `nodes` views). Diagnostics run
-off the server thread and expose only node, pool, cache, event, and delivery
-counters. Velocity provides `/easyvip network` and `/easyvip network nodes`.
+Paper administrators can run `/easyvip network status` (or the legacy alias
+`/easyvip admin network status`) and the narrower `cache`, `redis`, `database`,
+`deliveries`, and `nodes` views. Diagnostics run off the server thread and expose
+only node, pool, cache, event, and delivery counters. Velocity provides
+`/easyvip network` and `/easyvip network nodes`, restricted to `easyvip.admin`.
 
 ## Health interpretation
 

@@ -52,6 +52,10 @@ public final class EasyVipVelocityCommand implements SimpleCommand {
 
     @Override
     public boolean hasPermission(Invocation invocation) {
+        String[] args = invocation.arguments();
+        if (args.length > 0 && "network".equalsIgnoreCase(args[0])) {
+            return invocation.source().hasPermission("easyvip.admin");
+        }
         return invocation.source().hasPermission("easyvip.use");
     }
 
