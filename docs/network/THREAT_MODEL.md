@@ -41,6 +41,8 @@ safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
   transition winner before local actions.
 * Static bridges and global configuration increase test isolation and lifecycle
   coupling.
+* Redis payloads are untrusted transport data; Pub/Sub can duplicate, delay,
+  reorder, or disappear during an outage.
 
 ## Required mitigations before network use
 
@@ -50,6 +52,7 @@ safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
 * explicit node/proxy trust configuration and secret redaction;
 * outage tests proving fail-closed entitlement decisions and SQL authority.
 
-No new network or privilege surface is enabled by GOAL 02: SQL remains the
-authority, while leases and CAS make cross-node races explicit. Redis, proxy,
-delivery, and production failover risks remain open for later goals.
+GOAL 04 keeps SQL as the authority. Redis payloads are bounded, versioned,
+deduplicated, and used only for invalidation/visibility; Redis outage falls
+back to SQL plus TTL. Proxy, delivery, and production failover risks remain
+open for later goals.

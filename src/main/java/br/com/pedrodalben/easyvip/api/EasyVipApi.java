@@ -16,6 +16,10 @@ public interface EasyVipApi {
         return entitlements().player(playerUuid, context);
     }
 
+    default EffectiveEntitlementView effective(UUID playerUuid, ScopeContext context) {
+        return new EffectiveEntitlementView(playerUuid, context, List.of(), player(playerUuid, context));
+    }
+
     default PlayerEntitlementView player(UUID playerUuid) {
         return player(playerUuid, ScopeContext.network());
     }

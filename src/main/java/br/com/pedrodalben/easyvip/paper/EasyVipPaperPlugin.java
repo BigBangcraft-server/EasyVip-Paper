@@ -2,10 +2,18 @@ package br.com.pedrodalben.easyvip.paper;
 
 import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.api.EasyVipApi;
+import br.com.pedrodalben.easyvip.api.NetworkNodeIdentity;
+import br.com.pedrodalben.easyvip.cache.CachedEntitlementApi;
+import br.com.pedrodalben.easyvip.cache.EntitlementCache;
 import br.com.pedrodalben.easyvip.command.EasyVipCommandHandler;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.listener.PlayerListener;
 import br.com.pedrodalben.easyvip.network.LegacyVipCapabilityBridge;
+import br.com.pedrodalben.easyvip.network.NetworkEventListener;
+import br.com.pedrodalben.easyvip.redis.RedisConfig;
+import br.com.pedrodalben.easyvip.redis.RedisEventBus;
+import br.com.pedrodalben.easyvip.redis.RedisNodeRegistry;
+import br.com.pedrodalben.easyvip.redis.VersionAwareEventProcessor;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
 import br.com.pedrodalben.easyvip.platform.PaperPlatformBridge;
 import br.com.pedrodalben.easyvip.platform.PermissionBridge;
@@ -20,11 +28,22 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 
 public final class EasyVipPaperPlugin extends JavaPlugin {
 
     private static EasyVipPaperPlugin instance;
     private EasyVipApi easyVipApi;
+    private CachedEntitlementApi cachedEntitlementApi;
+    private EntitlementCache entitlementCache;
+    private RedisEventBus redisEventBus;
+    private ScheduledExecutorService networkScheduler;
+    private ExecutorService entitlementExecutor;
 
     public static EasyVipPaperPlugin getInstance() {
         return instance;
@@ -85,10 +104,53 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
             return;
         }
 
-        easyVipApi = LegacyVipCapabilityBridge.create(
+        EasyVipApi legacyApi = LegacyVipCapabilityBridge.create(
                 () -> EasyVipConfig.tiers.list,
                 PersistenceManager::getPlayerVips,
                 Clock.systemUTC());
+        entitlementCache = new EntitlementCache(EasyVipConfig.network.cacheMaximumEntries,
+                Duration.ofSeconds(EasyVipConfig.network.cacheTtlSeconds));
+        entitlementExecutor = Executors.newFixedThreadPool(2, daemonFactory("EasyVip-Entitlement"));
+        cachedEntitlementApi = new CachedEntitlementApi(legacyApi, entitlementCache, entitlementExecutor);
+        easyVipApi = cachedEntitlementApi;
+
+        NetworkNodeIdentity networkNode = new NetworkNodeIdentity(EasyVipConfig.network.nodeId,
+                EasyVipConfig.network.group, EasyVipConfig.network.environment,
+                new java.util.HashSet<>(EasyVipConfig.network.tags));
+        if (EasyVipConfig.network.redisEnabled) {
+            try {
+                RedisConfig redisConfig = new RedisConfig(EasyVipConfig.network.redisUri,
+                        EasyVipConfig.network.redisChannel, EasyVipConfig.network.redisTimeoutMillis,
+                        EasyVipConfig.network.redisIoThreads, EasyVipConfig.network.redisKeyPrefix);
+                redisEventBus = new RedisEventBus(redisConfig);
+                VersionAwareEventProcessor processor = new VersionAwareEventProcessor(
+                        EasyVipConfig.network.cacheMaximumEntries, EasyVipConfig.network.cacheMaximumEntries,
+                        event -> cachedEntitlementApi.invalidate(event.aggregateId(), event.aggregateVersion()),
+                        redisEventBus.metrics());
+                redisEventBus.start(processor::accept);
+                RedisNodeRegistry nodeRegistry = new RedisNodeRegistry(redisEventBus,
+                        Duration.ofSeconds(Math.max(10, EasyVipConfig.network.heartbeatIntervalSeconds * 3L)));
+                networkScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory("EasyVip-Network"));
+                Runnable heartbeat = () -> nodeRegistry.heartbeat(networkNode, getDescription().getVersion(),
+                        br.com.pedrodalben.easyvip.api.EasyVipApi.API_VERSION, Clock.systemUTC().instant());
+                heartbeat.run();
+                networkScheduler.scheduleAtFixedRate(heartbeat,
+                        EasyVipConfig.network.heartbeatIntervalSeconds,
+                        EasyVipConfig.network.heartbeatIntervalSeconds, TimeUnit.SECONDS);
+                redisEventBus.ping().whenComplete((result, error) -> {
+                    if (error != null) getLogger().warning("Redis unavailable; SQL remains authoritative and cache will use TTL: " + error.getClass().getSimpleName());
+                    else getLogger().info("Redis network event bus connected (" + result + ").");
+                });
+            } catch (RuntimeException exception) {
+                getLogger().warning("Redis disabled for this runtime; SQL remains authoritative: " + exception.getClass().getSimpleName());
+                if (redisEventBus != null) {
+                    redisEventBus.close();
+                    redisEventBus = null;
+                }
+            }
+        }
+        getServer().getPluginManager().registerEvents(new NetworkEventListener(cachedEntitlementApi,
+                redisEventBus, networkNode, Clock.systemUTC()), this);
 
         // 3. Setup bridges
         ActionExecutor.setPlatform(new PaperPlatformBridge());
@@ -133,6 +195,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         ExpirationService.stop();
         PersistenceManager.shutdown();
 
+        closeNetworkRuntime();
         easyVipApi = null;
         instance = null;
         getLogger().info("EasyVip disabled cleanly. Goodbye!");
@@ -146,5 +209,33 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         } else {
             getLogger().warning("Could not register command /" + name + " (missing in plugin.yml)");
         }
+    }
+
+    private void closeNetworkRuntime() {
+        if (networkScheduler != null) {
+            networkScheduler.shutdownNow();
+            networkScheduler = null;
+        }
+        if (redisEventBus != null) {
+            redisEventBus.close();
+            redisEventBus = null;
+        }
+        if (entitlementExecutor != null) {
+            entitlementExecutor.shutdownNow();
+            entitlementExecutor = null;
+        }
+        if (entitlementCache != null) {
+            entitlementCache.invalidateAll();
+            entitlementCache = null;
+        }
+        cachedEntitlementApi = null;
+    }
+
+    private static ThreadFactory daemonFactory(String prefix) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, prefix + "-" + System.nanoTime());
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 }

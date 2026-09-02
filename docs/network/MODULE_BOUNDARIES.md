@@ -22,8 +22,9 @@ need to know whether a player owns Gold or Diamond.
 | --- | --- | --- |
 | `easyvip-api` | JDK | platform/storage classes |
 | `easyvip-core` | API, JDK | Bukkit/Paper/Velocity/JDBC |
+| `easyvip-cache` | API, Caffeine | authoritative SQL/Redis state |
 | `easyvip-storage-sql` | API/core, JDBC/Hikari | Bukkit event/player types |
-| `easyvip-messaging-redis` | API/core, Redis client | authoritative state |
+| `easyvip-messaging-redis` | API/core, Jedis | authoritative state |
 | `easyvip-paper` | API/core/storage, Paper | SQL details to consumers |
 | `easyvip-velocity` | API/core/storage, Velocity | Paper classes |
 

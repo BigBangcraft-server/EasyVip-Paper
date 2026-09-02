@@ -31,11 +31,12 @@ network foundation one bounded goal at a time.
 * Add the Paper getter and compatibility projection without changing tier commands or activation.
 * Add API/core/bridge tests and plugin usage documentation.
 
-## GOAL 04 — events/cache
+## GOAL 04 — events/cache (implemented)
 
-* Add Redis as optional invalidation/event transport only.
-* Add bounded version-aware local cache and node heartbeat.
-* Keep SQL fallback safe when Redis is unavailable.
+* Add optional Jedis Pub/Sub transport with bounded pool, timeouts, reconnecting subscription, and sanitized failure handling.
+* Add a canonical versioned event codec, duplicate/stale-event processor, bounded Caffeine TTL cache, and metrics.
+* Add ephemeral node heartbeat/visibility with no entitlement authority.
+* Keep SQL fallback safe when Redis is unavailable and expose asynchronous cold-cache reads.
 
 ## GOAL 05 — delivery/Velocity
 

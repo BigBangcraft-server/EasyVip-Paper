@@ -1,6 +1,6 @@
 # EasyVip Network Architecture
 
-Status: GOAL 03 entitlement engine, Paper API `26.2.build.121-stable`, Java 25.
+Status: GOAL 04 Redis events/cache, Paper API `26.2.build.121-stable`, Java 25.
 
 ## Audit of the current HEAD
 
@@ -25,6 +25,7 @@ Storage V2 transition on top of the Paper 26.2 upgrade.
 | Package | Responsibility | Platform coupling |
 | --- | --- | --- |
 | `api` | New stable capability, scope, node, and event contracts | none |
+| `cache` | Bounded local resolved-view cache | Caffeine; no authority |
 | `model` | Mutable JSON/SQL persistence DTOs | none |
 | `config` | TOML parser/writer and global config objects | none |
 | `service` | VIP, key, package, and expiration workflows | Bukkit in key/package/VIP paths |
@@ -34,6 +35,7 @@ Storage V2 transition on top of the Paper 26.2 upgrade.
 | `event` | Bukkit event wrappers | Bukkit |
 | `listener`, `command`, `paper` | Paper adapter lifecycle and UI | Bukkit/Paper |
 | `webstore` | HTTP sync and fulfillment ledger | HTTP, persistence, Bukkit via actions |
+| `redis` | Pub/Sub event transport and ephemeral node registry | Jedis; optional |
 
 ### State and concurrency findings
 
@@ -54,6 +56,9 @@ Storage V2 transition on top of the Paper 26.2 upgrade.
 * `ConfiguredEntitlementService` resolves active `Grant` records into typed
   capabilities; `LegacyVipCapabilityBridge` projects current tiers without
   changing activation semantics.
+* `CachedEntitlementApi` fronts those views with bounded Caffeine TTL storage;
+  `RedisEventBus` and `RedisNodeRegistry` are optional invalidation/visibility
+  adapters and never authoritative state.
 
 ### Dependency direction after this goal
 
@@ -64,9 +69,9 @@ behavior was moved in this foundation change.
 ```text
                  easyvip-api (JDK only)
                          ^
-                 easyvip-core (next extraction)
+                 easyvip-core
                     ^          ^
-         easyvip-storage-sql  easyvip-messaging-redis (future)
+         easyvip-storage-sql  easyvip-messaging-redis
                     ^
        easyvip-paper       easyvip-velocity (future adapters)
 ```

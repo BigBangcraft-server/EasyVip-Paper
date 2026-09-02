@@ -11,6 +11,7 @@ public record DomainEvent(
         DomainEventType type,
         int schemaVersion,
         UUID aggregateId,
+        long aggregateVersion,
         String originatingNode,
         Instant occurredAt,
         Map<String, String> attributes
@@ -22,10 +23,19 @@ public record DomainEvent(
             throw new IllegalArgumentException("schemaVersion must be positive");
         }
         Objects.requireNonNull(aggregateId, "aggregateId");
+        if (aggregateVersion < 0) {
+            throw new IllegalArgumentException("aggregateVersion cannot be negative");
+        }
         if (originatingNode == null || originatingNode.isBlank()) {
             throw new IllegalArgumentException("originatingNode cannot be blank");
         }
         Objects.requireNonNull(occurredAt, "occurredAt");
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    }
+
+    /** Backwards-compatible constructor for local events without a version token. */
+    public DomainEvent(UUID eventId, DomainEventType type, int schemaVersion, UUID aggregateId,
+                       String originatingNode, Instant occurredAt, Map<String, String> attributes) {
+        this(eventId, type, schemaVersion, aggregateId, 0L, originatingNode, occurredAt, attributes);
     }
 }

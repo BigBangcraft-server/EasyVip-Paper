@@ -5,6 +5,7 @@ import br.com.pedrodalben.easyvip.webstore.FulfillmentConfig;
 import br.com.pedrodalben.easyvip.webstore.FulfillmentKeyConfig;
 import br.com.pedrodalben.easyvip.webstore.FulfillmentProductConfig;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -14,6 +15,7 @@ public final class EasyVipConfig {
     private static Path configDir;
 
     public static final CommonConfig common = new CommonConfig();
+    public static final NetworkConfig network = new NetworkConfig();
     public static final MessagesConfig messages = new MessagesConfig();
     public static final PoolsConfig pools = new PoolsConfig();
     public static final TiersConfig tiers = new TiersConfig();
@@ -34,6 +36,7 @@ public final class EasyVipConfig {
         Files.createDirectories(configDir);
 
         loadCommon();
+        loadNetwork();
         loadMessages();
         loadPools();
         loadTiers();
@@ -41,6 +44,67 @@ public final class EasyVipConfig {
         loadRewardKeys();
         loadIntegrations();
         loadWebStore();
+    }
+
+    // ─── Pools Config ───────────────────────────────────────
+    public static class NetworkConfig {
+        public boolean redisEnabled;
+        public String redisUri = "redis://127.0.0.1:6379";
+        public String redisChannel = "easyvip.events";
+        public String redisKeyPrefix = "easyvip:";
+        public int redisTimeoutMillis = 1000;
+        public int redisIoThreads = 2;
+        public String nodeId = "paper-01";
+        public String group = "lobby";
+        public String environment = "production";
+        public final List<String> tags = new ArrayList<>(List.of("paper"));
+        public long cacheMaximumEntries = 10_000;
+        public int cacheTtlSeconds = 30;
+        public int heartbeatIntervalSeconds = 15;
+    }
+
+    private static void loadNetwork() throws IOException {
+        Path file = configDir.resolve("network.toml");
+        if (!Files.exists(file)) {
+            TomlWriter.writeFile(file, buildNetworkToml());
+        }
+        Map<String, Object> parsed = TomlParser.parseFile(file);
+        Map<String, Object> networkData = asMap(parsed.get("network"));
+        if (networkData == null) return;
+        network.redisEnabled = getBoolean(networkData, "redis_enabled", network.redisEnabled);
+        network.redisUri = getString(networkData, "redis_uri", network.redisUri);
+        network.redisChannel = getString(networkData, "redis_channel", network.redisChannel);
+        network.redisKeyPrefix = getString(networkData, "redis_key_prefix", network.redisKeyPrefix);
+        network.redisTimeoutMillis = getInt(networkData, "redis_timeout_millis", network.redisTimeoutMillis);
+        network.redisIoThreads = getInt(networkData, "redis_io_threads", network.redisIoThreads);
+        network.nodeId = getString(networkData, "node_id", network.nodeId);
+        network.group = getString(networkData, "group", network.group);
+        network.environment = getString(networkData, "environment", network.environment);
+        network.tags.clear();
+        network.tags.addAll(getStringList(networkData, "tags", List.of("paper")));
+        network.cacheMaximumEntries = getLong(networkData, "cache_maximum_entries", network.cacheMaximumEntries);
+        network.cacheTtlSeconds = getInt(networkData, "cache_ttl_seconds", network.cacheTtlSeconds);
+        network.heartbeatIntervalSeconds = getInt(networkData, "heartbeat_interval_seconds", network.heartbeatIntervalSeconds);
+    }
+
+    private static Map<String, Object> buildNetworkToml() {
+        Map<String, Object> root = new LinkedHashMap<>();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("redis_enabled", network.redisEnabled);
+        data.put("redis_uri", network.redisUri);
+        data.put("redis_channel", network.redisChannel);
+        data.put("redis_key_prefix", network.redisKeyPrefix);
+        data.put("redis_timeout_millis", network.redisTimeoutMillis);
+        data.put("redis_io_threads", network.redisIoThreads);
+        data.put("node_id", network.nodeId);
+        data.put("group", network.group);
+        data.put("environment", network.environment);
+        data.put("tags", new ArrayList<>(network.tags));
+        data.put("cache_maximum_entries", network.cacheMaximumEntries);
+        data.put("cache_ttl_seconds", network.cacheTtlSeconds);
+        data.put("heartbeat_interval_seconds", network.heartbeatIntervalSeconds);
+        root.put("network", data);
+        return root;
     }
 
     // ─── Pools Config ───────────────────────────────────────
@@ -1402,6 +1466,26 @@ public final class EasyVipConfig {
                 }
             }
         }
+        if (network.redisEnabled) {
+            try {
+                URI redisUri = URI.create(network.redisUri);
+                if (!("redis".equalsIgnoreCase(redisUri.getScheme()) || "rediss".equalsIgnoreCase(redisUri.getScheme()))
+                        || redisUri.getHost() == null || redisUri.getHost().isBlank()) {
+                    errors.add("network.toml: redis_uri must be a redis:// or rediss:// URI with a host.");
+                }
+            } catch (IllegalArgumentException exception) {
+                errors.add("network.toml: redis_uri is invalid.");
+            }
+        }
+        if (network.nodeId == null || network.nodeId.isBlank()) errors.add("network.toml: node_id cannot be empty.");
+        if (network.group == null || network.group.isBlank()) errors.add("network.toml: group cannot be empty.");
+        if (network.environment == null || network.environment.isBlank()) errors.add("network.toml: environment cannot be empty.");
+        if (network.redisTimeoutMillis < 100) errors.add("network.toml: redis_timeout_millis must be at least 100.");
+        if (network.redisIoThreads < 1) errors.add("network.toml: redis_io_threads must be positive.");
+        if (network.cacheMaximumEntries < 1) errors.add("network.toml: cache_maximum_entries must be positive.");
+        if (network.cacheTtlSeconds < 1) errors.add("network.toml: cache_ttl_seconds must be positive.");
+        if (network.heartbeatIntervalSeconds < 5) errors.add("network.toml: heartbeat_interval_seconds must be at least 5.");
+        if (network.tags.stream().anyMatch(tag -> tag == null || tag.isBlank())) errors.add("network.toml: tags cannot contain blank values.");
         for (PackageDefinition pkg : packages.list.values()) {
             if (pkg.id == null || pkg.id.trim().isEmpty()) {
                 errors.add(localized(

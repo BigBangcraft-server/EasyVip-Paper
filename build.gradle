@@ -35,6 +35,8 @@ dependencies {
 
     implementation 'com.zaxxer:HikariCP:5.1.0'
     implementation 'com.mysql:mysql-connector-j:8.3.0'
+    implementation 'redis.clients:jedis:7.1.0'
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.2.4'
 
     testImplementation 'io.papermc.paper:paper-api:26.2.build.121-stable'
     testImplementation 'net.luckperms:api:5.4'
