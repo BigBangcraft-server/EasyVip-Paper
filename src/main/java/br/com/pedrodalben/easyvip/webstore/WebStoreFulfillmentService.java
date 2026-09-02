@@ -981,8 +981,11 @@ public final class WebStoreFulfillmentService {
             validateExactKeys(obj, "fulfillment_id", "order_id", "minecraft_uuid", "minecraft_username",
                     "claim_token", "lease_expires_at", "origin_server_id", "server_id", "items");
             ClaimFulfillment fulfillment = new ClaimFulfillment();
-            fulfillment.fulfillmentId = getJsonString(obj, "fulfillment_id");
-            fulfillment.orderId = getJsonString(obj, "order_id");
+            fulfillment.fulfillmentId = requiredJsonString(obj, "fulfillment_id");
+            if (!isSafePathSegment(fulfillment.fulfillmentId)) {
+                throw new IllegalArgumentException("invalid_fulfillment_id");
+            }
+            fulfillment.orderId = requiredJsonString(obj, "order_id");
             fulfillment.minecraftUuid = getJsonString(obj, "minecraft_uuid");
             fulfillment.minecraftUsername = getJsonString(obj, "minecraft_username");
             fulfillment.claimToken = getJsonString(obj, "claim_token");
@@ -1014,8 +1017,8 @@ public final class WebStoreFulfillmentService {
                 JsonObject itemObj = itemEl.getAsJsonObject();
                 validateExactKeys(itemObj, "line_item_id", "product_sku", "quantity");
                 ClaimItem item = new ClaimItem();
-                item.lineItemId = getJsonString(itemObj, "line_item_id");
-                item.productSku = getJsonString(itemObj, "product_sku");
+                item.lineItemId = requiredJsonString(itemObj, "line_item_id");
+                item.productSku = requiredJsonString(itemObj, "product_sku");
                 item.quantity = getJsonInt(itemObj, "quantity");
                 fulfillment.items.add(item);
             }
@@ -1050,6 +1053,17 @@ public final class WebStoreFulfillmentService {
         String value = element.getAsString();
         if (value.length() > 4096) throw new IllegalArgumentException("field_too_long:" + key);
         return value;
+    }
+
+    private static String requiredJsonString(JsonObject obj, String key) {
+        String value = getJsonString(obj, key);
+        if (value.isBlank()) throw new IllegalArgumentException("missing_field:" + key);
+        return value;
+    }
+
+    private static boolean isSafePathSegment(String value) {
+        return value.length() <= 255 && value.chars().allMatch(character ->
+                Character.isLetterOrDigit(character) || ".-_~".indexOf(character) >= 0);
     }
 
     private static int getJsonInt(JsonObject obj, String key) {

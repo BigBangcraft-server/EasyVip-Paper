@@ -342,6 +342,21 @@ class WebStoreFulfillmentServiceTest {
     }
 
     @Test
+    void claimParserRejectsPathManipulationAndMissingIdentifiers() {
+        JsonObject unsafe = claimBody("claim-1", leaseAt(60), SERVER_ID,
+                "fulfillment/escape", "order-1", "line-1", "vip", 1);
+        assertThrows(java.lang.reflect.InvocationTargetException.class, () -> invoke(
+                "parseClaimResponse", new Class<?>[]{byte[].class},
+                unsafe.toString().getBytes(StandardCharsets.UTF_8)));
+
+        JsonObject missing = claimBody("claim-2", leaseAt(60), SERVER_ID,
+                "", "order-1", "line-1", "vip", 1);
+        assertThrows(java.lang.reflect.InvocationTargetException.class, () -> invoke(
+                "parseClaimResponse", new Class<?>[]{byte[].class},
+                missing.toString().getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
     void claimPayloadIncludesServerContext() throws Exception {
         AtomicReference<String> syncBody = new AtomicReference<>();
         try (TestRailsServer rails = startRails(request -> {
