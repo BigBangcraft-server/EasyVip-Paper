@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
@@ -38,5 +39,7 @@ class ActionExecutorPlaceholderTest {
                 List.of(Map.of("type", "send_message", "message", "ok")), Map.of())
                 .toCompletableFuture().join());
         verify(player).sendMessage(any(net.kyori.adventure.text.Component.class));
+        assertFalse(ActionExecutor.executeAsync(null, null, List.of(), Map.of())
+                .toCompletableFuture().join());
     }
 }

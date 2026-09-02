@@ -73,7 +73,10 @@ public final class ActionExecutor {
     public static CompletionStage<Boolean> executeAsync(Plugin plugin, Player player,
                                                           List<Map<String, Object>> actions,
                                                           Map<String, String> context) {
-        if (plugin == null || player == null) {
+        if (player == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        if (plugin == null) {
             return CompletableFuture.completedFuture(execute(player, actions, context));
         }
         if (actions == null || actions.isEmpty()) {
