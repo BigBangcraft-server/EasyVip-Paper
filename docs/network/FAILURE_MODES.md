@@ -20,6 +20,7 @@
 | LuckPerms unavailable | projection future fails; EasyVip state is unchanged | authority is not delegated |
 | Velocity SQL/Redis failure | command returns unavailable/failure message | no capability is granted on dependency failure |
 | SQL datasource unavailable | health is unhealthy and lifecycle transition returns false | no entitlement transition is granted without SQL authority |
+| diagnostics executor saturated | status/doctor returns a failed future | command thread is not blocked or allowed to grow work indefinitely |
 | remote Redis/WebStore uses plaintext transport | production config validation rejects it | credentials are not silently sent without TLS |
 
 Capability reads on a cold cache can use `playerAsync`; a caller must handle

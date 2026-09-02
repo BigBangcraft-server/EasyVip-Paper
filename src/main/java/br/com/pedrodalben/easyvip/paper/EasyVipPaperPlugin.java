@@ -35,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -62,29 +63,34 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         if (executor == null) {
             return CompletableFuture.completedFuture("state=unavailable");
         }
-        return CompletableFuture.supplyAsync(() -> {
-            var sql = SqlDatabaseManager.healthSnapshot();
-            String sqlState = !EasyVipConfig.integrations.sqlEnabled ? "disabled"
-                    : (sql.healthy() ? "healthy" : "unhealthy");
-            String redisState = redisEventBus == null ? "disabled"
-                    : (redisEventBus.isRunning() ? "running" : "stopped");
-            String cacheState = entitlementCache == null ? "disabled"
-                    : "entries=" + entitlementCache.estimatedSize()
-                    + ",hits=" + entitlementCache.stats().hitCount()
-                    + ",misses=" + entitlementCache.stats().missCount();
-            var metrics = redisEventBus == null ? null : redisEventBus.metrics().snapshot();
-            String redisMetrics = metrics == null ? "n/a"
-                    : "published=" + metrics.published() + ",received=" + metrics.received()
-                    + ",invalid=" + metrics.invalidEvents() + ",ignored=" + metrics.ignoredEvents();
-            return "node=" + EasyVipConfig.network.nodeId
-                    + " sql=" + sqlState
-                    + " pool=" + sql.active() + "/" + sql.total() + ",waiting=" + sql.waiting()
-                    + " deliveries=claimed:" + sql.claimedDeliveries()
-                    + ",delivered:" + sql.deliveredDeliveries()
-                    + ",failed:" + sql.failedDeliveries()
-                    + " redis=" + redisState + " (" + redisMetrics + ")"
-                    + " cache=" + cacheState;
-        }, executor);
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                var sql = SqlDatabaseManager.healthSnapshot();
+                String sqlState = !EasyVipConfig.integrations.sqlEnabled ? "disabled"
+                        : (sql.healthy() ? "healthy" : "unhealthy");
+                String redisState = redisEventBus == null ? "disabled"
+                        : (redisEventBus.isRunning() ? "running" : "stopped");
+                String cacheState = entitlementCache == null ? "disabled"
+                        : "entries=" + entitlementCache.estimatedSize()
+                        + ",hits=" + entitlementCache.stats().hitCount()
+                        + ",misses=" + entitlementCache.stats().missCount();
+                var metrics = redisEventBus == null ? null : redisEventBus.metrics().snapshot();
+                String redisMetrics = metrics == null ? "n/a"
+                        : "published=" + metrics.published() + ",received=" + metrics.received()
+                        + ",invalid=" + metrics.invalidEvents() + ",ignored=" + metrics.ignoredEvents();
+                return "node=" + EasyVipConfig.network.nodeId
+                        + " sql=" + sqlState
+                        + " pool=" + sql.active() + "/" + sql.total() + ",waiting=" + sql.waiting()
+                        + " deliveries=claimed:" + sql.claimedDeliveries()
+                        + ",delivered:" + sql.deliveredDeliveries()
+                        + ",failed:" + sql.failedDeliveries()
+                        + " redis=" + redisState + " (" + redisMetrics + ")"
+                        + " cache=" + cacheState;
+            }, executor);
+        } catch (RejectedExecutionException rejected) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Diagnostics executor is saturated", rejected));
+        }
     }
 
     public CompletionStage<String> networkDoctorAsync() {
