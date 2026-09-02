@@ -4,11 +4,11 @@ Redis is an optional transport for cache invalidation, lifecycle events, and
 ephemeral node visibility. MySQL/SQL remains the authoritative entitlement
 source. A Redis restart cannot delete or mutate a VIP grant.
 
-The implementation uses Jedis `7.1.0` with a bounded connection pool and a
-dedicated daemon subscription worker. Publish, ping, node heartbeat, and
-visibility calls run on the Redis executor; no Paper event handler waits for a
-Redis round trip. The pool config has bounded wait, socket/connect timeout,
-idle health checks, and no credential logging. `redis://` and `rediss://` are
+The implementation uses Jedis `7.1.0` with a bounded connection pool, a bounded
+I/O work queue, and a dedicated daemon subscription worker. Publish, ping, node
+heartbeat, and visibility calls run on the Redis executor; no Paper event
+handler waits for a Redis round trip. The pool config has bounded wait,
+socket/connect timeout, idle health checks, and no credential logging. `redis://` and `rediss://` are
 accepted; production deployments should use `rediss://` plus ACLs.
 
 The channel is configurable (`network.redis_channel`) and the key namespace

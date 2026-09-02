@@ -11,13 +11,17 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** Optional Redis Pub/Sub transport. SQL-backed operations never depend on it. */
 public final class RedisEventBus implements AutoCloseable {
@@ -48,7 +52,10 @@ public final class RedisEventBus implements AutoCloseable {
         poolConfig.setTestWhileIdle(true);
         poolConfig.setTimeBetweenEvictionRuns(Duration.ofSeconds(30));
         this.pool = new JedisPool(poolConfig, URI.create(config.uri()), config.timeoutMillis());
-        this.ioExecutor = Executors.newFixedThreadPool(config.ioThreads(), daemonFactory("EasyVip-Redis"));
+        int queueCapacity = (int) Math.min(4096L, Math.max(32L, config.ioThreads() * 64L));
+        this.ioExecutor = new ThreadPoolExecutor(config.ioThreads(), config.ioThreads(),
+                0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(queueCapacity),
+                daemonFactory("EasyVip-Redis"), new ThreadPoolExecutor.AbortPolicy());
         this.subscriptionExecutor = Executors.newSingleThreadExecutor(daemonFactory("EasyVip-Redis-Subscription"));
     }
 
@@ -62,7 +69,7 @@ public final class RedisEventBus implements AutoCloseable {
 
     public CompletionStage<Long> publish(DomainEvent event) {
         String payload = codec.encode(event);
-        return CompletableFuture.supplyAsync(() -> publishWithRetry(payload), ioExecutor);
+        return submitAsync(() -> publishWithRetry(payload));
     }
 
     public CompletionStage<String> ping() {
@@ -75,14 +82,31 @@ public final class RedisEventBus implements AutoCloseable {
 
     public <T> CompletionStage<T> execute(Function<Jedis, T> operation) {
         Objects.requireNonNull(operation, "operation");
-        return CompletableFuture.supplyAsync(() -> {
+        return submitAsync(() -> {
             try (Jedis jedis = pool.getResource()) {
                 return operation.apply(jedis);
             } catch (RuntimeException exception) {
                 metrics.commandFailed();
                 throw exception;
             }
-        }, ioExecutor);
+        });
+    }
+
+    private <T> CompletionStage<T> submitAsync(Supplier<T> operation) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            ioExecutor.execute(() -> {
+                try {
+                    future.complete(operation.get());
+                } catch (Throwable exception) {
+                    future.completeExceptionally(exception);
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            metrics.commandFailed();
+            future.completeExceptionally(new IllegalStateException("Redis executor is saturated", rejected));
+        }
+        return future;
     }
 
     private long publishWithRetry(String payload) {
