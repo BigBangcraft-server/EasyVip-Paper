@@ -92,6 +92,23 @@ class RedisInfrastructureTest {
         }
     }
 
+    @Test
+    void cachedApiFailsClosedWhenAsyncExecutorIsSaturated() {
+        EasyVipApi delegate = new EasyVipApi() {
+            @Override public br.com.pedrodalben.easyvip.api.EntitlementService entitlements() { return this::player; }
+            @Override public br.com.pedrodalben.easyvip.api.BenefitService benefits() { return this::player; }
+            @Override public PlayerEntitlementView player(UUID uuid, ScopeContext context) {
+                return new PlayerEntitlementView(Map.of());
+            }
+        };
+        CachedEntitlementApi api = new CachedEntitlementApi(delegate, new EntitlementCache(10, Duration.ofMinutes(1)), command -> {
+            throw new java.util.concurrent.RejectedExecutionException("test");
+        });
+
+        assertThrows(java.util.concurrent.CompletionException.class,
+                () -> api.playerAsync(PLAYER, CONTEXT).toCompletableFuture().join());
+    }
+
     private static DomainEvent event(UUID eventId, long version) {
         return new DomainEvent(eventId, DomainEventType.ENTITLEMENT_UPDATED, 1, PLAYER, version,
                 "node", Instant.parse("2026-09-01T12:00:00Z"), Map.of());

@@ -35,8 +35,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 public final class EasyVipPaperPlugin extends JavaPlugin {
@@ -165,7 +167,9 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
                 Clock.systemUTC());
         entitlementCache = new EntitlementCache(EasyVipConfig.network.cacheMaximumEntries,
                 Duration.ofSeconds(EasyVipConfig.network.cacheTtlSeconds));
-        entitlementExecutor = Executors.newFixedThreadPool(2, daemonFactory("EasyVip-Entitlement"));
+        entitlementExecutor = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(256), daemonFactory("EasyVip-Entitlement"),
+                new ThreadPoolExecutor.AbortPolicy());
         cachedEntitlementApi = new CachedEntitlementApi(legacyApi, entitlementCache, entitlementExecutor);
         easyVipApi = cachedEntitlementApi;
 

@@ -28,7 +28,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -72,11 +73,12 @@ public final class EasyVipVelocityPlugin implements AutoCloseable {
                     Clock.systemUTC());
             cache = new EntitlementCache(EasyVipConfig.network.cacheMaximumEntries,
                     Duration.ofSeconds(EasyVipConfig.network.cacheTtlSeconds));
-            entitlementExecutor = Executors.newFixedThreadPool(2, runnable -> {
-                Thread thread = new Thread(runnable, "EasyVip-Velocity-Entitlement");
-                thread.setDaemon(true);
-                return thread;
-            });
+            entitlementExecutor = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(256), runnable -> {
+                        Thread thread = new Thread(runnable, "EasyVip-Velocity-Entitlement");
+                        thread.setDaemon(true);
+                        return thread;
+                    }, new ThreadPoolExecutor.AbortPolicy());
             api = new CachedEntitlementApi(legacy, cache, entitlementExecutor);
             nodeIdentity = new NetworkNodeIdentity(EasyVipConfig.network.nodeId,
                     EasyVipConfig.network.group, EasyVipConfig.network.environment,

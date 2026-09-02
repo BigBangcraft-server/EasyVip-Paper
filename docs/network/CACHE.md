@@ -11,6 +11,8 @@ adapter resolves a fresh view. `CachedEntitlementApi.playerAsync` exists for
 cold-cache calls so a Paper/Folia event thread can keep database work off its
 critical path. Existing synchronous calls remain compatible for callers that
 already run off-thread or have a warm cache.
+The Paper and Velocity async executors use bounded queues; saturation returns a
+failed future so callers can fail closed instead of growing an unbounded queue.
 
 Invalidation sources:
 

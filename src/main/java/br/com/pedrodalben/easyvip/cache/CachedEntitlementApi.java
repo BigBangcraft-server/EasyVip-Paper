@@ -12,6 +12,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /** Cache-first API adapter. A miss delegates to SQL-backed entitlement evaluation. */
 public final class CachedEntitlementApi implements EasyVipApi {
@@ -57,7 +58,11 @@ public final class CachedEntitlementApi implements EasyVipApi {
 
     /** Cold-cache SQL work can be kept off a Paper/Folia event thread. */
     public CompletionStage<PlayerEntitlementView> playerAsync(UUID playerUuid, ScopeContext context) {
-        return CompletableFuture.supplyAsync(() -> player(playerUuid, context), asyncExecutor);
+        try {
+            return CompletableFuture.supplyAsync(() -> player(playerUuid, context), asyncExecutor);
+        } catch (RejectedExecutionException rejected) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Entitlement executor is saturated", rejected));
+        }
     }
 
     public void invalidate(UUID playerUuid, long aggregateVersion) {
