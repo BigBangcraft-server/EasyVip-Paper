@@ -148,6 +148,34 @@ class SqlConcurrencyTest {
     }
 
     @Test
+    void replacingGrantKeepsPreviousLifecycleHistory() {
+        UUID player = UUID.randomUUID();
+        PlayerVipRegistry registry = new PlayerVipRegistry(player);
+        registry.setPlayerName("History");
+        registry.getVips().put("vip", new PlayerVipRecord("vip", 10L, 100L, true, false));
+        SqlDatabaseManager.updatePlayerVips(player, registry);
+
+        PlayerVipRegistry replacement = SqlDatabaseManager.getPlayerVips(player);
+        replacement.getVips().put("vip", new PlayerVipRecord("vip", 20L, 200L, true, false));
+        SqlDatabaseManager.updatePlayerVips(player, replacement);
+
+        List<String> statuses = SqlDatabaseManager.withConnection(conn -> {
+            try (var ps = conn.prepareStatement("""
+                    SELECT status FROM easyvip_entitlement_grants
+                    WHERE player_uuid = ? ORDER BY starts_at
+                    """)) {
+                ps.setString(1, player.toString());
+                try (var rs = ps.executeQuery()) {
+                    List<String> result = new java.util.ArrayList<>();
+                    while (rs.next()) result.add(rs.getString("status"));
+                    return result;
+                }
+            }
+        });
+        assertEquals(List.of("revoked", "active"), statuses);
+    }
+
+    @Test
     void duplicateIdempotencyRollbackAndRestartAreObservable() {
         UUID player = UUID.randomUUID();
         KeyRecord key = new KeyRecord();

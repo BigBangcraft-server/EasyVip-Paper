@@ -585,8 +585,7 @@ public final class SqlDatabaseManager {
     }
 
     private static void insertLegacyGrant(Connection conn, UUID uuid, PlayerVipRecord record, long now) throws SQLException {
-        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + record.getTierId() + ":" + record.getStartTime())
-                .getBytes(StandardCharsets.UTF_8)).toString();
+        String grantId = grantId(uuid, record.getTierId(), record.getStartTime());
         try (PreparedStatement ps = conn.prepareStatement("""
                 INSERT INTO easyvip_entitlement_grants
                 (grant_id, player_uuid, entitlement_id, starts_at, expires_at, status, active,
@@ -707,13 +706,11 @@ public final class SqlDatabaseManager {
                 conn.rollback();
                 throw new ConcurrentModificationException("Stale VIP snapshot for " + uuid);
             }
-            Set<String> currentTierIds = new HashSet<>(registry.getVips().keySet());
-            revokeMissingGrants(conn, uuid, currentTierIds, now);
-            try (PreparedStatement delete = conn.prepareStatement(
-                    "DELETE FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active'")) {
-                delete.setString(1, uuid.toString());
-                delete.executeUpdate();
+            Set<String> currentGrantIds = new HashSet<>();
+            for (PlayerVipRecord record : registry.getVips().values()) {
+                currentGrantIds.add(grantId(uuid, record.getTierId(), record.getStartTime()));
             }
+            revokeMissingGrants(conn, uuid, currentGrantIds, now);
             for (PlayerVipRecord record : registry.getVips().values()) {
                 insertCurrentGrant(conn, uuid, record, now);
             }
@@ -764,7 +761,7 @@ public final class SqlDatabaseManager {
         return registry;
     }
 
-    private static void revokeMissingGrants(Connection conn, UUID uuid, Set<String> currentTierIds, long now) throws SQLException {
+    private static void revokeMissingGrants(Connection conn, UUID uuid, Set<String> currentGrantIds, long now) throws SQLException {
         try (PreparedStatement select = conn.prepareStatement(
                 "SELECT grant_id, entitlement_id FROM easyvip_entitlement_grants WHERE player_uuid = ? AND status = 'active'");
              PreparedStatement update = conn.prepareStatement(
@@ -772,7 +769,7 @@ public final class SqlDatabaseManager {
             select.setString(1, uuid.toString());
             try (ResultSet rs = select.executeQuery()) {
                 while (rs.next()) {
-                    if (!currentTierIds.contains(rs.getString("entitlement_id"))) {
+                    if (!currentGrantIds.contains(rs.getString("grant_id"))) {
                         update.setLong(1, now);
                         update.setString(2, rs.getString("grant_id"));
                         update.addBatch();
@@ -781,6 +778,11 @@ public final class SqlDatabaseManager {
             }
             update.executeBatch();
         }
+    }
+
+    private static String grantId(UUID uuid, String tierId, long startTime) {
+        return UUID.nameUUIDFromBytes((uuid + ":" + tierId + ":" + startTime)
+                .getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     private static PlayerVipRegistry readLegacyRegistry(Connection conn, UUID uuid) throws SQLException {
@@ -801,8 +803,23 @@ public final class SqlDatabaseManager {
     }
 
     private static void insertCurrentGrant(Connection conn, UUID uuid, PlayerVipRecord record, long now) throws SQLException {
-        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + record.getTierId() + ":" + record.getStartTime())
-                .getBytes(StandardCharsets.UTF_8)).toString();
+        String grantId = grantId(uuid, record.getTierId(), record.getStartTime());
+        try (PreparedStatement update = conn.prepareStatement("""
+                UPDATE easyvip_entitlement_grants
+                SET player_uuid = ?, entitlement_id = ?, starts_at = ?, expires_at = ?, status = 'active',
+                    active = ?, pending_activate = ?, updated_at = ?, version = version + 1
+                WHERE grant_id = ?
+                """)) {
+            update.setString(1, uuid.toString());
+            update.setString(2, record.getTierId());
+            update.setLong(3, record.getStartTime());
+            update.setLong(4, record.getExpiryTime());
+            update.setBoolean(5, record.isActive());
+            update.setBoolean(6, record.isPendingActivateActions());
+            update.setLong(7, now);
+            update.setString(8, grantId);
+            if (update.executeUpdate() == 1) return;
+        }
         try (PreparedStatement ps = conn.prepareStatement("""
                 INSERT INTO easyvip_entitlement_grants
                 (grant_id, player_uuid, entitlement_id, starts_at, expires_at, status, active,
@@ -829,8 +846,7 @@ public final class SqlDatabaseManager {
     /** Exactly one node can win an expiry transition for a normalized grant. */
     public static boolean transitionEntitlementExpired(UUID uuid, String tierId, long startTime, long now) {
         if (uuid == null || tierId == null) return false;
-        String grantId = UUID.nameUUIDFromBytes((uuid + ":" + tierId + ":" + startTime)
-                .getBytes(StandardCharsets.UTF_8)).toString();
+        String grantId = grantId(uuid, tierId, startTime);
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement("""
                      UPDATE easyvip_entitlement_grants
