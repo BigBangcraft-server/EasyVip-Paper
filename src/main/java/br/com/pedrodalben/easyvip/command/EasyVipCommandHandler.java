@@ -1032,6 +1032,16 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             return true;
         }
         String sub = args.isEmpty() ? "status" : args.get(0).toLowerCase(Locale.ROOT);
+        if ("reconcile".equals(sub)) {
+            return handleNetworkReconcile(sender, args.subList(1, args.size()), paper);
+        }
+        if ("doctor".equals(sub)) {
+            paper.networkDoctorAsync().whenComplete((status, error) ->
+                    sendNetworkMessage(sender, error == null
+                            ? "§7[§eEasyVip§7] " + status
+                            : "§cUnable to run network doctor."));
+            return true;
+        }
         if ("nodes".equals(sub)) {
             var nodes = paper.networkNodes();
             if (nodes == null) {
@@ -1047,14 +1057,41 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         }
         if (!Set.of("status", "cache", "redis", "database", "deliveries").contains(sub)) {
             TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
-                    "Usage: /easyvip admin network <status|nodes|cache|redis|database|deliveries>",
-                    "Uso: /easyvip admin network <status|nodes|cache|redis|database|deliveries>"));
+                    "Usage: /easyvip network <status|nodes|cache|redis|database|deliveries|reconcile|doctor>",
+                    "Uso: /easyvip network <status|nodes|cache|redis|database|deliveries|reconcile|doctor>"));
             return true;
         }
         paper.networkStatusAsync().whenComplete((status, error) ->
                 sendNetworkMessage(sender, error == null
                         ? "§7[§eEasyVip§7] " + status
                         : "§cUnable to collect network diagnostics."));
+        return true;
+    }
+
+    private boolean handleNetworkReconcile(CommandSender sender, List<String> args,
+                                           br.com.pedrodalben.easyvip.paper.EasyVipPaperPlugin paper) {
+        if (args.size() != 1 || args.get(0).isBlank()) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "Usage: /easyvip network reconcile <player>",
+                    "Uso: /easyvip network reconcile <jogador>"));
+            return true;
+        }
+        String requestedName = args.get(0);
+        Player online = Bukkit.getPlayerExact(requestedName);
+        OfflinePlayer target = online != null ? online : Bukkit.getOfflinePlayer(requestedName);
+        if (online == null && !target.hasPlayedBefore()) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "Player has no known server profile.",
+                    "O jogador não possui perfil conhecido neste servidor."));
+            return true;
+        }
+        java.util.UUID playerUuid = target.getUniqueId();
+        paper.playerCapabilitiesAsync(playerUuid)
+                .thenCompose(view -> PermissionBridge.reconcileCapabilities(playerUuid, view.capabilities().keySet()))
+                .whenComplete((result, error) -> sendNetworkMessage(sender, error == null
+                        ? "§a[§eEasyVip§a] Reconciled " + requestedName + " (added="
+                        + result.added().size() + ",removed=" + result.removed().size() + ")."
+                        : "§cUnable to reconcile " + requestedName + "."));
         return true;
     }
 
@@ -1414,7 +1451,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
 
         if (sub.equals("network")) {
             if (args.length == 2 && PermissionBridge.hasPermission(sender, "easyvip.admin")) {
-                return filterMatches(List.of("status", "nodes", "cache", "redis", "database", "deliveries"), args[1]);
+                    return filterMatches(List.of("status", "nodes", "cache", "redis", "database", "deliveries", "reconcile", "doctor"), args[1]);
             }
             return Collections.emptyList();
         }
@@ -1501,7 +1538,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 if (args.length == 3) return filterMatches(List.of("status"), args[2]);
             }
             if (adminSub.equals("network")) {
-                if (args.length == 3) return filterMatches(List.of("status", "nodes", "cache", "redis", "database", "deliveries"), args[2]);
+                if (args.length == 3) return filterMatches(List.of("status", "nodes", "cache", "redis", "database", "deliveries", "reconcile", "doctor"), args[2]);
             }
             if (adminSub.equals("generate")) {
                 if (args.length == 3) return filterMatches(List.of("vip", "reward", "command", "item", "itemstack", "custom"), args[2]);

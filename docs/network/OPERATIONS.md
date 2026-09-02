@@ -4,8 +4,10 @@
 
 Paper administrators can run `/easyvip network status` (or the legacy alias
 `/easyvip admin network status`) and the narrower `cache`, `redis`, `database`,
-`deliveries`, and `nodes` views. Diagnostics run off the server thread and expose
-only node, pool, cache, event, and delivery counters. Velocity provides
+`deliveries`, and `nodes` views. `doctor` returns a safe PASS/WARN summary, and
+`reconcile <player>` refreshes only the EasyVip-managed LuckPerms namespace.
+Diagnostics and reconciliation run off the server thread and expose only node,
+pool, cache, event, delivery, and reconciliation counters. Velocity provides
 `/easyvip network` and `/easyvip network nodes`, restricted to `easyvip.admin`.
 
 ## Health interpretation

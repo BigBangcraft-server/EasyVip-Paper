@@ -3,6 +3,7 @@ package br.com.pedrodalben.easyvip.paper;
 import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.api.EasyVipApi;
 import br.com.pedrodalben.easyvip.api.NetworkNodeIdentity;
+import br.com.pedrodalben.easyvip.api.PlayerEntitlementView;
 import br.com.pedrodalben.easyvip.cache.CachedEntitlementApi;
 import br.com.pedrodalben.easyvip.cache.EntitlementCache;
 import br.com.pedrodalben.easyvip.command.EasyVipCommandHandler;
@@ -82,6 +83,23 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
                     + " redis=" + redisState + " (" + redisMetrics + ")"
                     + " cache=" + cacheState;
         }, executor);
+    }
+
+    public CompletionStage<String> networkDoctorAsync() {
+        return networkStatusAsync().thenApply(status -> {
+            boolean sqlReady = status.contains("sql=healthy") || status.contains("sql=disabled");
+            boolean redisReady = !EasyVipConfig.network.redisEnabled || status.contains("redis=running");
+            String verdict = sqlReady && redisReady ? "PASS" : "WARN";
+            return "doctor=" + verdict + " " + status;
+        });
+    }
+
+    public CompletionStage<PlayerEntitlementView> playerCapabilitiesAsync(java.util.UUID playerUuid) {
+        CachedEntitlementApi api = cachedEntitlementApi;
+        if (api == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("EasyVip is unavailable"));
+        }
+        return api.playerAsync(playerUuid, br.com.pedrodalben.easyvip.api.ScopeContext.network());
     }
 
     public RedisNodeRegistry networkNodes() {
