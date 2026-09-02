@@ -145,9 +145,12 @@ public final class SqlDatabaseManager {
         }
     }
 
-    private static String sqlFailure(SQLException exception) {
-        String state = exception.getSQLState();
-        return exception.getClass().getSimpleName() + (state == null ? "" : " state=" + state);
+    private static String sqlFailure(Throwable exception) {
+        if (exception instanceof SQLException sqlException) {
+            String state = sqlException.getSQLState();
+            return exception.getClass().getSimpleName() + (state == null ? "" : " state=" + state);
+        }
+        return exception.getClass().getSimpleName();
     }
 
     private static Connection getConnection() throws SQLException {
@@ -491,7 +494,7 @@ public final class SqlDatabaseManager {
             }
         } catch (SQLException e) {
             if (!isDuplicateKeyError(e)) {
-                System.err.println("[EasyVip-SQL] Failed to ensure index " + table + "." + indexName + ": " + e.getMessage());
+                System.err.println("[EasyVip-SQL] Failed to ensure index " + table + "." + indexName + ": " + sqlFailure(e));
             }
         }
     }
@@ -507,7 +510,7 @@ public final class SqlDatabaseManager {
             }
         } catch (SQLException e) {
             if (!isDuplicateKeyError(e)) {
-                System.err.println("[EasyVip-SQL] Failed to ensure unique index " + table + "." + indexName + ": " + e.getMessage());
+                System.err.println("[EasyVip-SQL] Failed to ensure unique index " + table + "." + indexName + ": " + sqlFailure(e));
             }
         }
     }
@@ -525,7 +528,7 @@ public final class SqlDatabaseManager {
                 }
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Failed to ensure column " + table + "." + column + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Failed to ensure column " + table + "." + column + ": " + sqlFailure(e));
         }
     }
 
@@ -557,13 +560,13 @@ public final class SqlDatabaseManager {
                     }
                 } catch (SQLException | RuntimeException rowError) {
                     conn.rollback(rowSavepoint);
-                    System.err.println("[EasyVip-SQL] Legacy VIP row skipped for " + rawUuid + ": " + rowError.getMessage());
+                    System.err.println("[EasyVip-SQL] Legacy VIP row skipped for " + rawUuid + ": " + sqlFailure(rowError));
                 }
             }
             conn.commit();
             conn.setAutoCommit(true);
         } catch (SQLException | RuntimeException e) {
-            System.err.println("[EasyVip-SQL] Legacy VIP migration skipped: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Legacy VIP migration skipped: " + sqlFailure(e));
         }
     }
 
@@ -635,7 +638,7 @@ public final class SqlDatabaseManager {
             }
             return readLegacyRegistry(conn, uuid);
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading VIPs for " + uuid + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading VIPs for " + uuid + ": " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -655,7 +658,7 @@ public final class SqlDatabaseManager {
                         rs.getString("active_entitlement_id"), rs.getLong("version")));
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading all VIPs: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading all VIPs: " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -850,7 +853,7 @@ public final class SqlDatabaseManager {
         try (Connection conn = getConnection()) {
             return getKey(conn, code);
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code) + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code) + ": " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -879,7 +882,7 @@ public final class SqlDatabaseManager {
                 result.add(mapKeyRecord(rs));
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading all keys: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading all keys: " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -912,7 +915,7 @@ public final class SqlDatabaseManager {
             }
             conn.commit();
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error saving key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(record.getCode()) + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error saving key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(record.getCode()) + ": " + sqlFailure(e));
         } finally {
             LOCK.writeLock().unlock();
         }
@@ -948,7 +951,7 @@ public final class SqlDatabaseManager {
                     KeyRecord existing = getKey(conn, record.getCode());
                     return existing != null ? existing : record;
                 }
-                System.err.println("[EasyVip-SQL] Error inserting key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(record.getCode()) + ": " + e.getMessage());
+                System.err.println("[EasyVip-SQL] Error inserting key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(record.getCode()) + ": " + sqlFailure(e));
                 return record;
             } finally {
                 try {
@@ -957,7 +960,7 @@ public final class SqlDatabaseManager {
                 }
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error getting connection for key insert: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error getting connection for key insert: " + sqlFailure(e));
             return record;
         }
     }
@@ -1007,7 +1010,7 @@ public final class SqlDatabaseManager {
             ps.setString(1, code);
             ps.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error removing key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code) + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error removing key " + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code) + ": " + sqlFailure(e));
         }
     }
 
@@ -1175,7 +1178,7 @@ public final class SqlDatabaseManager {
             }
             System.err.println("[EasyVip-SQL] claimKey failed for "
                     + br.com.pedrodalben.easyvip.util.KeySecurity.maskKey(code)
-                    + " state=" + e.getSQLState() + ": " + e.getMessage());
+                    + ": " + sqlFailure(e));
             return new KeyClaimResult(KeyClaimStatus.ERROR, null, null);
         }
     }
@@ -1352,7 +1355,7 @@ public final class SqlDatabaseManager {
                 }
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading pending variants for " + uuid + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading pending variants for " + uuid + ": " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -1370,7 +1373,7 @@ public final class SqlDatabaseManager {
                 result.computeIfAbsent(uuid, k -> new ArrayList<>()).add(mapPendingVariant(rs));
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading all pending variants: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading all pending variants: " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -1389,7 +1392,7 @@ public final class SqlDatabaseManager {
             ps.setString(5, selection.getClaimId());
             ps.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error adding pending variant: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error adding pending variant: " + sqlFailure(e));
         } finally {
             LOCK.writeLock().unlock();
         }
@@ -1404,7 +1407,7 @@ public final class SqlDatabaseManager {
             ps.setString(2, packageId);
             ps.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error removing pending variant: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error removing pending variant: " + sqlFailure(e));
         } finally {
             LOCK.writeLock().unlock();
         }
@@ -1444,7 +1447,7 @@ public final class SqlDatabaseManager {
                 }
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading package usage for " + uuid + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading package usage for " + uuid + ": " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -1463,7 +1466,7 @@ public final class SqlDatabaseManager {
                     .put(rs.getString("package_id"), rs.getLong("usage_count"));
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading all package usage: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading all package usage: " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -1496,7 +1499,7 @@ public final class SqlDatabaseManager {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error updating package usage for " + uuid + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error updating package usage for " + uuid + ": " + sqlFailure(e));
         } finally {
             LOCK.writeLock().unlock();
         }
@@ -1586,7 +1589,7 @@ public final class SqlDatabaseManager {
                 }
             }
             System.err.println("[EasyVip-SQL] claimPackage failed for " + packageId
-                    + " state=" + e.getSQLState() + ": " + e.getMessage());
+                    + ": " + sqlFailure(e));
             return new PackageClaimResult(PackageClaimStatus.ERROR, null);
         }
     }
@@ -1858,7 +1861,7 @@ public final class SqlDatabaseManager {
             ps.setString(5, br.com.pedrodalben.easyvip.util.KeySecurity.sanitizeAuditDetails(record.getDetails()));
             ps.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error writing audit log: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error writing audit log: " + sqlFailure(e));
         } finally {
             LOCK.writeLock().unlock();
         }
@@ -1881,7 +1884,7 @@ public final class SqlDatabaseManager {
                 result.add(record);
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading audit logs: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading audit logs: " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -1909,7 +1912,7 @@ public final class SqlDatabaseManager {
                 }
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading fulfillment " + fulfillmentId + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading fulfillment " + fulfillmentId + ": " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }
@@ -1966,7 +1969,7 @@ public final class SqlDatabaseManager {
             if (conn != null) {
                 try { conn.rollback(); } catch (SQLException ignored) {}
             }
-            System.err.println("[EasyVip-SQL] Error inserting fulfillment: " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error inserting fulfillment: " + sqlFailure(e));
             return false;
         } finally {
             if (conn != null) {
@@ -2032,7 +2035,7 @@ public final class SqlDatabaseManager {
                 }
             }
         } catch (SQLException e) {
-            System.err.println("[EasyVip-SQL] Error reading webstore fulfillment " + fulfillmentId + ": " + e.getMessage());
+            System.err.println("[EasyVip-SQL] Error reading webstore fulfillment " + fulfillmentId + ": " + sqlFailure(e));
         } finally {
             LOCK.readLock().unlock();
         }

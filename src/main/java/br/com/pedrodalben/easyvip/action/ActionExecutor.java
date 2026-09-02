@@ -59,9 +59,6 @@ public final class ActionExecutor {
             } catch (Throwable e) {
                 System.err.println("[EasyVip] Error executing action of type " + action.get("type")
                         + ": " + e.getClass().getSimpleName());
-                if (EasyVipConfig.common.debug) {
-                    e.printStackTrace();
-                }
                 allOk = false;
             }
         }

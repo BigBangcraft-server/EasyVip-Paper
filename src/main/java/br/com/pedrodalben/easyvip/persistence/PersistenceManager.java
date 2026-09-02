@@ -39,7 +39,7 @@ public final class PersistenceManager {
         return sqlMode;
     }
 
-    public static void initialize(Path dir) {
+    public static synchronized void initialize(Path dir) {
         if (executor.isShutdown()) {
             executor = newExecutor();
         }
@@ -80,12 +80,15 @@ public final class PersistenceManager {
         }
     }
 
-    public static void shutdown() {
+    public static synchronized void shutdown() {
         if (dataDir == null && !sqlMode) {
             return;
         }
         if (sqlMode) {
             SqlDatabaseManager.shutdown();
+            sqlMode = false;
+            stopExecutor();
+            dataDir = null;
             return;
         }
         flush();
@@ -99,13 +102,19 @@ public final class PersistenceManager {
         } finally {
             LOCK.writeLock().unlock();
         }
-        executor.shutdown();
+        stopExecutor();
+        dataDir = null;
+    }
+
+    private static void stopExecutor() {
+        ExecutorService current = executor;
+        current.shutdown();
         try {
-            if (!executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                executor.shutdownNow();
+            if (!current.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                current.shutdownNow();
             }
         } catch (InterruptedException e) {
-            executor.shutdownNow();
+            current.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
