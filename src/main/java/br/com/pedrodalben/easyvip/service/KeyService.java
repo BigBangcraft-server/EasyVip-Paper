@@ -25,7 +25,9 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
 public final class KeyService {
@@ -208,6 +210,165 @@ public final class KeyService {
 
     public static RedeemResult redeemPhysicalKey(Player player, String rawCode, String instanceId) {
         return redeemKey(player, rawCode, false, CommandThrottleType.USE, true, instanceId);
+    }
+
+    /** Non-blocking Paper/Folia entry point; Bukkit effects are marshalled to the player scheduler. */
+    public static CompletionStage<RedeemResult> redeemKeyAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                                                String rawCode, boolean bypassConfirm) {
+        return redeemKeyAsync(plugin, player, rawCode, bypassConfirm, CommandThrottleType.USE, true, null);
+    }
+
+    /** Non-blocking physical-key entry point used by the interaction listener. */
+    public static CompletionStage<RedeemResult> redeemPhysicalKeyAsync(org.bukkit.plugin.Plugin plugin,
+                                                                         Player player, String rawCode,
+                                                                         String instanceId) {
+        return redeemKeyAsync(plugin, player, rawCode, false, CommandThrottleType.USE, true, instanceId);
+    }
+
+    /** Non-blocking confirmation entry point used by the command adapter. */
+    public static CompletionStage<RedeemResult> confirmPendingAsync(org.bukkit.plugin.Plugin plugin, Player player) {
+        if (plugin == null || player == null) {
+            return CompletableFuture.completedFuture(confirmPending(player));
+        }
+        UUID uuid = player.getUniqueId();
+        PendingConfirmation pending = confirmations.get(uuid);
+        if (pending == null || pending.isExpired()) {
+            confirmations.remove(uuid);
+            return CompletableFuture.completedFuture(RedeemResult.INVALID_KEY);
+        }
+        return redeemKeyAsync(plugin, player, pending.code, true, CommandThrottleType.CONFIRM, true, null);
+    }
+
+    private record AsyncKeyClaim(RedeemResult result, KeyRecord record, String claimId,
+                                  DeliveryClaim delivery, boolean consumesUse, UUID uuid,
+                                  String playerName, String code, String physicalInstanceId) {
+    }
+
+    private static CompletionStage<RedeemResult> redeemKeyAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                                                 String rawCode, boolean bypassConfirm,
+                                                                 CommandThrottleType throttleType,
+                                                                 boolean applyCooldown, String physicalInstanceId) {
+        if (plugin == null || player == null) {
+            return CompletableFuture.completedFuture(
+                    redeemKey(player, rawCode, bypassConfirm, throttleType, applyCooldown, physicalInstanceId));
+        }
+
+        String code = normalizeCode(rawCode);
+        UUID uuid = player.getUniqueId();
+        String playerName = player.getName();
+        if (applyCooldown && isOnCooldown(uuid, throttleType)) {
+            return CompletableFuture.completedFuture(RedeemResult.ON_COOLDOWN);
+        }
+        if (EasyVipConfig.common.confirmBeforeUse && !bypassConfirm) {
+            confirmations.put(uuid, new PendingConfirmation(code));
+            return CompletableFuture.completedFuture(RedeemResult.CONFIRMATION_REQUIRED);
+        }
+
+        CompletionStage<AsyncKeyClaim> prepared = PersistenceManager.executeAsync(() ->
+                PersistenceManager.isSqlMode()
+                        ? prepareSqlClaim(code, uuid, playerName, physicalInstanceId)
+                        : prepareJsonClaim(code, uuid, playerName, physicalInstanceId));
+        return prepared.thenCompose(claim -> finishAsyncKeyClaim(plugin, player, claim, throttleType, applyCooldown));
+    }
+
+    private static AsyncKeyClaim prepareSqlClaim(String code, UUID uuid, String playerName, String physicalInstanceId) {
+        KeyRecord preflightRecord = PersistenceManager.getKey(code);
+        RedeemResult preflight = preflightCheck(preflightRecord, uuid, physicalInstanceId);
+        if (preflight != null) {
+            return new AsyncKeyClaim(preflight, preflightRecord, null, null, false, uuid, playerName, code, physicalInstanceId);
+        }
+        boolean consumesUse = !("reward".equalsIgnoreCase(preflightRecord.getType())
+                && !isRewardConsumeOnUse(preflightRecord));
+        SqlDatabaseManager.KeyClaimResult claim = SqlDatabaseManager.claimKey(
+                code, uuid, physicalInstanceId, consumesUse, UUID.randomUUID().toString(),
+                System.currentTimeMillis(), 30_000L);
+        RedeemResult failure = mapClaimStatus(claim.status());
+        if (failure != null || claim.record() == null || claim.claimId() == null) {
+            return new AsyncKeyClaim(failure == null ? RedeemResult.ERROR : failure, claim.record(),
+                    claim.claimId(), null, consumesUse, uuid, playerName, code, physicalInstanceId);
+        }
+        DeliveryClaim delivery = claimDelivery(claim.record(), uuid, physicalInstanceId, claim.claimId(), consumesUse);
+        if (!delivery.delivered() && !delivery.acquired()) {
+            return new AsyncKeyClaim(RedeemResult.ERROR, claim.record(), claim.claimId(), delivery,
+                    consumesUse, uuid, playerName, code, physicalInstanceId);
+        }
+        return new AsyncKeyClaim(null, claim.record(), claim.claimId(), delivery, consumesUse,
+                uuid, playerName, code, physicalInstanceId);
+    }
+
+    private static AsyncKeyClaim prepareJsonClaim(String code, UUID uuid, String playerName, String physicalInstanceId) {
+        KeyRecord record = PersistenceManager.getKey(code);
+        RedeemResult preflight = preflightCheck(record, uuid, physicalInstanceId);
+        return new AsyncKeyClaim(preflight, record, null, null,
+                record != null && !("reward".equalsIgnoreCase(record.getType()) && !isRewardConsumeOnUse(record)),
+                uuid, playerName, code, physicalInstanceId);
+    }
+
+    private static CompletionStage<RedeemResult> finishAsyncKeyClaim(org.bukkit.plugin.Plugin plugin, Player player,
+                                                                       AsyncKeyClaim claim,
+                                                                       CommandThrottleType throttleType,
+                                                                       boolean applyCooldown) {
+        if (claim.result() != null) {
+            return CompletableFuture.completedFuture(claim.result());
+        }
+        Map<String, String> context = new HashMap<>();
+        context.put("player", claim.playerName());
+        context.put("player_uuid", claim.uuid().toString());
+
+        CompletionStage<Boolean> effect;
+        if ("vip".equalsIgnoreCase(claim.record().getType())) {
+            effect = VipService.runOnServerAsync(plugin, player, () ->
+                    isDimensionAllowed(getDimensionId(player), EasyVipConfig.common.allowedDimensions,
+                            EasyVipConfig.common.denyDimensions)).thenCompose(allowed -> {
+                if (!allowed) return CompletableFuture.completedFuture(false);
+                return VipService.addVipAsync(plugin, claim.uuid(), claim.playerName(), claim.record().getTierId(),
+                        claim.record().getDuration(), claim.playerName(), false);
+            });
+        } else {
+            effect = VipService.runOnServerAsync(plugin, player,
+                    () -> executeKeyReward(player, claim.record(), context));
+        }
+
+        return effect.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
+                .thenCompose(success -> PersistenceManager.executeAsync(() ->
+                        finalizeAsyncKeyClaim(claim, success, throttleType, applyCooldown)));
+    }
+
+    private static RedeemResult finalizeAsyncKeyClaim(AsyncKeyClaim claim, boolean success,
+                                                       CommandThrottleType throttleType, boolean applyCooldown) {
+        if (!success) {
+            if (claim.delivery() != null) {
+                DELIVERY_LEDGER.fail(claim.delivery().deliveryId(), claim.uuid(), EasyVipConfig.network.nodeId,
+                        "action_failed", java.time.Clock.systemUTC());
+            }
+            if (claim.claimId() != null) {
+                SqlDatabaseManager.releaseKeyClaim(claim.claimId(), "action_failed");
+            }
+            return RedeemResult.ERROR;
+        }
+        if (claim.delivery() != null && !claim.delivery().delivered()
+                && !DELIVERY_LEDGER.complete(claim.delivery().deliveryId(), claim.uuid(),
+                EasyVipConfig.network.nodeId, java.time.Clock.systemUTC())) {
+            return RedeemResult.ERROR;
+        }
+        if (claim.claimId() != null && !SqlDatabaseManager.completeKeyClaim(
+                claim.claimId(), claim.uuid(), claim.consumesUse(), System.currentTimeMillis())) {
+            return RedeemResult.ERROR;
+        }
+        if (claim.claimId() == null) {
+            // JSON is a compatibility fallback; SQL mode is the distributed authority.
+            KeyRecord current = PersistenceManager.getKey(claim.code());
+            if (current == null || preflightCheck(current, claim.uuid(), claim.physicalInstanceId()) != null) {
+                return RedeemResult.ERROR;
+            }
+            consumeRecord(current, claim.uuid(), claim.physicalInstanceId());
+            PersistenceManager.putKey(current);
+        }
+        if (applyCooldown) markCooldown(claim.uuid(), throttleType);
+        confirmations.remove(claim.uuid());
+        PersistenceManager.log(claim.playerName(), "redeem_key",
+                "Redeemed key " + KeySecurity.describeKeyForLog(claim.code()));
+        return RedeemResult.SUCCESS;
     }
 
     private static RedeemResult redeemKey(Player player, String rawCode, boolean bypassConfirm, CommandThrottleType throttleType, boolean applyCooldown, String physicalInstanceId) {

@@ -120,13 +120,22 @@ public final class PlayerListener implements Listener {
             return;
         }
 
-        KeyService.RedeemResult result = KeyService.redeemPhysicalKey(player, keyCode, instanceId);
-
-        if (result == KeyService.RedeemResult.SUCCESS) {
-            // Decrement the physical item stack
-            item.setAmount(item.getAmount() - 1);
+        if (plugin != null) {
+            KeyService.redeemPhysicalKeyAsync(plugin, player, keyCode, instanceId)
+                    .whenComplete((result, error) -> runOnPlayerThread(player, () -> {
+                        KeyService.RedeemResult effective = error == null ? result : KeyService.RedeemResult.ERROR;
+                        if (effective == KeyService.RedeemResult.SUCCESS) {
+                            item.setAmount(Math.max(0, item.getAmount() - 1));
+                        }
+                        EasyVipCommandHandler.sendRedeemFeedbackAsync(plugin, player, effective, keyCode);
+                    }));
+            return;
         }
 
+        KeyService.RedeemResult result = KeyService.redeemPhysicalKey(player, keyCode, instanceId);
+        if (result == KeyService.RedeemResult.SUCCESS) {
+            item.setAmount(item.getAmount() - 1);
+        }
         EasyVipCommandHandler.sendRedeemFeedback(player, result, keyCode);
     }
 }

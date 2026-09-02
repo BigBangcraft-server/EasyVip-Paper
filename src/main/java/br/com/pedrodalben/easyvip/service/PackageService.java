@@ -14,6 +14,7 @@ import br.com.pedrodalben.easyvip.platform.TextUtil;
 import org.bukkit.entity.Player;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
@@ -160,6 +161,144 @@ public final class PackageService {
             PersistenceManager.log(player.getName(), "give_package", "Given package " + packageId + " to " + player.getName());
             return true;
         }
+    }
+
+    /** Non-blocking package claim; only the external Bukkit effect runs on the player scheduler. */
+    public static CompletionStage<Boolean> givePackageAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                                             String packageId) {
+        if (plugin == null || player == null) {
+            return CompletableFuture.completedFuture(givePackage(player, packageId));
+        }
+        EasyVipConfig.PackageDefinition def = EasyVipConfig.packages.list.get(packageId);
+        if (def == null) {
+            return VipService.runOnServerAsync(plugin, player, () -> {
+                TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                        EasyVipConfig.messages.prefix + EasyVipConfig.messages.packageNotFound, new HashMap<>()));
+                return false;
+            });
+        }
+        UUID uuid = player.getUniqueId();
+        String playerName = player.getName();
+        CompletionStage<AsyncPackageClaim> prepared = PersistenceManager.executeAsync(() ->
+                preparePackageClaim(uuid, playerName, packageId, def));
+        return prepared.thenCompose(claim -> finishPackageClaimAsync(plugin, player, claim));
+    }
+
+    private record AsyncPackageClaim(EasyVipConfig.PackageDefinition definition, UUID uuid, String playerName,
+                                     String packageId, boolean accepted, boolean sql, String claimId,
+                                     DeliveryClaim delivery, String failure) {
+    }
+
+    private static AsyncPackageClaim preparePackageClaim(UUID uuid, String playerName, String packageId,
+                                                          EasyVipConfig.PackageDefinition def) {
+        if (PersistenceManager.isSqlMode()) {
+            SqlDatabaseManager.PackageClaimResult claim = SqlDatabaseManager.claimPackage(
+                    uuid, packageId, def.repeatable, def.cooldownSeconds * 1000L,
+                    UUID.randomUUID().toString(), System.currentTimeMillis(), 60_000L);
+            if (claim.status() != SqlDatabaseManager.PackageClaimStatus.CLAIMED || claim.claimId() == null) {
+                String failure = claim.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN
+                        ? "cooldown" : "already_claimed";
+                return new AsyncPackageClaim(def, uuid, playerName, packageId, false, true,
+                        claim.claimId(), null, failure);
+            }
+            DeliveryClaim delivery = def.variants != null && !def.variants.isEmpty()
+                    ? null : claimDelivery(uuid, packageId, claim.claimId());
+            if (delivery != null && !delivery.delivered() && !delivery.acquired()) {
+                return new AsyncPackageClaim(def, uuid, playerName, packageId, false, true,
+                        claim.claimId(), delivery, "in_progress");
+            }
+            return new AsyncPackageClaim(def, uuid, playerName, packageId, true, true,
+                    claim.claimId(), delivery, null);
+        }
+
+        Map<String, Long> usage = PersistenceManager.getPackageUsage(uuid);
+        Long lastUsed = usage.get(packageId);
+        if (!def.repeatable && lastUsed != null) {
+            return new AsyncPackageClaim(def, uuid, playerName, packageId, false, false,
+                    null, null, "already_claimed");
+        }
+        if (def.cooldownSeconds > 0 && lastUsed != null
+                && System.currentTimeMillis() - lastUsed < def.cooldownSeconds * 1000L) {
+            return new AsyncPackageClaim(def, uuid, playerName, packageId, false, false,
+                    null, null, "cooldown");
+        }
+        return new AsyncPackageClaim(def, uuid, playerName, packageId, true, false,
+                null, null, null);
+    }
+
+    private static CompletionStage<Boolean> finishPackageClaimAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                                                     AsyncPackageClaim claim) {
+        if (!claim.accepted()) {
+            return VipService.runOnServerAsync(plugin, player, () -> {
+                String message = "cooldown".equals(claim.failure())
+                        ? EasyVipConfig.localized("&cThis package is still on cooldown.",
+                        "&cEste pacote ainda está em cooldown.")
+                        : EasyVipConfig.localized("&cThis package has already been redeemed before.",
+                        "&cEste pacote já foi resgatado anteriormente.");
+                TextUtil.sendMessage(player, EasyVipConfig.messages.prefix + message);
+                return false;
+            });
+        }
+
+        Map<String, String> context = new HashMap<>();
+        context.put("package", claim.definition().displayName);
+        context.put("package_id", claim.definition().id);
+        boolean hasVariants = claim.definition().variants != null && !claim.definition().variants.isEmpty();
+        if (hasVariants) {
+            return PersistenceManager.executeAsync(() -> {
+                PendingVariantSelection pending = new PendingVariantSelection(claim.uuid(), claim.packageId(),
+                        new ArrayList<>(claim.definition().variants.keySet()));
+                pending.setClaimId(claim.claimId());
+                PersistenceManager.addPendingVariant(claim.uuid(), pending);
+                if (!claim.sql()) markPackageUsage(claim.uuid(), claim.packageId());
+                return true;
+            }).thenCompose(ignored -> VipService.runOnServerAsync(plugin, player, () -> {
+                TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                        EasyVipConfig.messages.prefix + EasyVipConfig.messages.variantPending, context));
+                return true;
+            }));
+        }
+
+        CompletionStage<Boolean> effect = claim.delivery() != null && claim.delivery().delivered()
+                ? CompletableFuture.completedFuture(true)
+                : VipService.runOnServerAsync(plugin, player,
+                () -> ActionExecutor.execute(player, claim.definition().actions, context));
+        return effect.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
+                .thenCompose(success -> PersistenceManager.executeAsync(() -> finalizePackageClaim(claim, success)))
+                .thenCompose(success -> VipService.runOnServerAsync(plugin, player, () -> {
+                    if (success) {
+                        TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                                EasyVipConfig.messages.prefix + EasyVipConfig.messages.packageGiven, context));
+                    }
+                    return success;
+                }));
+    }
+
+    private static boolean finalizePackageClaim(AsyncPackageClaim claim, boolean success) {
+        if (!success) {
+            if (claim.delivery() != null) {
+                DELIVERY_LEDGER.fail(claim.delivery().deliveryId(), claim.uuid(), EasyVipConfig.network.nodeId,
+                        "action_failed", java.time.Clock.systemUTC());
+            }
+            if (claim.claimId() != null) {
+                SqlDatabaseManager.releasePackageClaim(claim.claimId(), claim.uuid(), "action_failed",
+                        System.currentTimeMillis());
+            }
+            return false;
+        }
+        if (claim.delivery() != null && !claim.delivery().delivered()
+                && !DELIVERY_LEDGER.complete(claim.delivery().deliveryId(), claim.uuid(),
+                EasyVipConfig.network.nodeId, java.time.Clock.systemUTC())) {
+            return false;
+        }
+        if (claim.claimId() != null && !SqlDatabaseManager.completePackageClaim(
+                claim.claimId(), claim.uuid(), System.currentTimeMillis())) {
+            return false;
+        }
+        if (!claim.sql()) markPackageUsage(claim.uuid(), claim.packageId());
+        PersistenceManager.log(claim.playerName(), "give_package",
+                "Given package " + claim.packageId() + " to " + claim.playerName());
+        return true;
     }
 
     private static boolean givePackageSql(Player player, EasyVipConfig.PackageDefinition def, String packageId) {
@@ -315,6 +454,131 @@ public final class PackageService {
         PersistenceManager.log(player.getName(), "choose_variant",
                 "Selected variant " + variantName + " for package " + packageId);
 
+        return true;
+    }
+
+    /** Non-blocking variant claim; SQL claim and cleanup stay off the server thread. */
+    public static CompletionStage<Boolean> chooseVariantAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                                               String packageId, String variantName) {
+        if (plugin == null || player == null) {
+            return CompletableFuture.completedFuture(chooseVariant(player, packageId, variantName));
+        }
+        UUID uuid = player.getUniqueId();
+        String playerName = player.getName();
+        CompletionStage<AsyncVariantClaim> prepared = PersistenceManager.executeAsync(() ->
+                prepareVariantClaim(uuid, playerName, packageId, variantName));
+        return prepared.thenCompose(claim -> finishVariantClaimAsync(plugin, player, claim));
+    }
+
+    private record AsyncVariantClaim(EasyVipConfig.PackageDefinition definition, UUID uuid, String playerName,
+                                     String packageId, String variantName, List<Map<String, Object>> actions,
+                                     DeliveryClaim delivery, String claimId,
+                                     boolean accepted, String failure) {
+    }
+
+    private static AsyncVariantClaim prepareVariantClaim(UUID uuid, String playerName, String packageId,
+                                                          String variantName) {
+        PendingVariantSelection match = null;
+        for (PendingVariantSelection selection : PersistenceManager.getPendingVariants(uuid)) {
+            if (selection.getPackageId().equals(packageId)) {
+                match = selection;
+                break;
+            }
+        }
+        if (match == null) {
+            return new AsyncVariantClaim(null, uuid, playerName, packageId, variantName,
+                    null, null, null, false, "not_found");
+        }
+        if (match.isExpired(EasyVipConfig.common.variantSelectionTimeoutSeconds)) {
+            if (PersistenceManager.isSqlMode() && match.getClaimId() != null) {
+                SqlDatabaseManager.releasePackageClaim(match.getClaimId(), uuid, "selection_expired", System.currentTimeMillis());
+            }
+            PersistenceManager.removePendingVariant(uuid, packageId);
+            return new AsyncVariantClaim(null, uuid, playerName, packageId, variantName,
+                    null, null, match.getClaimId(), false, "expired");
+        }
+        EasyVipConfig.PackageDefinition def = EasyVipConfig.packages.list.get(packageId);
+        if (def == null || def.variants == null) {
+            PersistenceManager.removePendingVariant(uuid, packageId);
+            return new AsyncVariantClaim(def, uuid, playerName, packageId, variantName,
+                    null, null, match.getClaimId(), false, "not_found");
+        }
+        List<Map<String, Object>> variantActions = def.variants.get(variantName.toLowerCase(Locale.ROOT));
+        if (variantActions == null) {
+            return new AsyncVariantClaim(def, uuid, playerName, packageId, variantName,
+                    null, null, match.getClaimId(), false, "invalid");
+        }
+        DeliveryClaim delivery = null;
+        if (PersistenceManager.isSqlMode() && match.getClaimId() != null) {
+            delivery = claimDelivery(uuid, packageId, match.getClaimId());
+            if (!delivery.delivered() && !delivery.acquired()) {
+                return new AsyncVariantClaim(def, uuid, playerName, packageId, variantName,
+                        variantActions, delivery, match.getClaimId(), false, "in_progress");
+            }
+        }
+        return new AsyncVariantClaim(def, uuid, playerName, packageId, variantName,
+                variantActions, delivery, match.getClaimId(), true, null);
+    }
+
+    private static CompletionStage<Boolean> finishVariantClaimAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                                                      AsyncVariantClaim claim) {
+        if (!claim.accepted()) {
+            return VipService.runOnServerAsync(plugin, player, () -> {
+                String message = switch (claim.failure()) {
+                    case "expired" -> EasyVipConfig.localized("&cThis variant choice has expired.",
+                            "&cEsta escolha de variante expirou.");
+                    case "invalid" -> EasyVipConfig.localized("&cInvalid variant.", "&cVariante inválida.");
+                    default -> EasyVipConfig.localized("&cNo pending variant found.", "&cNenhuma variante pendente encontrada.");
+                };
+                TextUtil.sendMessage(player, EasyVipConfig.messages.prefix + message);
+                return false;
+            });
+        }
+        Map<String, String> context = new HashMap<>();
+        context.put("package", claim.definition().displayName);
+        context.put("package_id", claim.definition().id);
+        context.put("variant", claim.variantName());
+        CompletionStage<Boolean> effect = claim.delivery() != null && claim.delivery().delivered()
+                ? CompletableFuture.completedFuture(true)
+                : VipService.runOnServerAsync(plugin, player, () ->
+                ActionExecutor.execute(player, claim.definition().actions, context)
+                        && ActionExecutor.execute(player, claim.actions(), context));
+        return effect.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
+                .thenCompose(success -> PersistenceManager.executeAsync(() -> finalizeVariantClaim(claim, success)))
+                .thenCompose(success -> VipService.runOnServerAsync(plugin, player, () -> {
+                    if (success) {
+                        TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                                EasyVipConfig.messages.prefix + EasyVipConfig.messages.variantSelected, context));
+                    }
+                    return success;
+                }));
+    }
+
+    private static boolean finalizeVariantClaim(AsyncVariantClaim claim, boolean success) {
+        if (!success) {
+            if (claim.delivery() != null) {
+                DELIVERY_LEDGER.fail(claim.delivery().deliveryId(), claim.uuid(), EasyVipConfig.network.nodeId,
+                        "action_failed", java.time.Clock.systemUTC());
+            }
+            if (claim.claimId() != null) {
+                SqlDatabaseManager.releasePackageClaim(claim.claimId(), claim.uuid(), "action_failed",
+                        System.currentTimeMillis());
+            }
+            return false;
+        }
+        if (claim.delivery() != null && !claim.delivery().delivered()
+                && !DELIVERY_LEDGER.complete(claim.delivery().deliveryId(), claim.uuid(),
+                EasyVipConfig.network.nodeId, java.time.Clock.systemUTC())) {
+            return false;
+        }
+        if (claim.claimId() != null && !SqlDatabaseManager.completePackageClaim(
+                claim.claimId(), claim.uuid(), System.currentTimeMillis())) {
+            return false;
+        }
+        PersistenceManager.removePendingVariant(claim.uuid(), claim.packageId());
+        if (claim.claimId() == null) markPackageUsage(claim.uuid(), claim.packageId());
+        PersistenceManager.log(claim.playerName(), "choose_variant",
+                "Selected variant " + claim.variantName() + " for package " + claim.packageId());
         return true;
     }
 

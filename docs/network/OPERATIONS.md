@@ -22,7 +22,8 @@ pool, cache, event, delivery, and reconciliation counters. Velocity provides
 Never paste diagnostics containing connection URLs or credentials into tickets.
 
 The public capability API, join/expiration persistence, VIP add/remove/active
-mutations, and diagnostics use bounded asynchronous executors. Legacy key and
-package mutations still run through the existing synchronous command path;
-schedule those from automation during low-traffic windows until their adapter
-is fully asynchronous.
+mutations, key redemption, and package claims use bounded asynchronous
+executors. Bukkit effects are scheduled back to the owning player/global
+scheduler; SQL/file claims and completion stay off the server thread.
+Legacy action scripts that invoke `give_package` still use the synchronous
+compatibility API and should be migrated before latency-sensitive production use.

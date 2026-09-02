@@ -228,8 +228,14 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             return true;
         }
 
-        KeyService.RedeemResult result = KeyService.redeemKey(player, key, false);
-        sendRedeemFeedback(player, result, key);
+        if (plugin != null) {
+            KeyService.redeemKeyAsync(plugin, player, key, false)
+                    .whenComplete((result, error) -> sendRedeemFeedbackAsync(plugin, player,
+                            error == null ? result : KeyService.RedeemResult.ERROR, key));
+        } else {
+            KeyService.RedeemResult result = KeyService.redeemKey(player, key, false);
+            sendRedeemFeedback(player, result, key);
+        }
         return true;
     }
 
@@ -239,21 +245,52 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             return true;
         }
 
-        KeyService.RedeemResult result = KeyService.confirmPending(player);
-        sendRedeemFeedback(player, result, "");
+        if (plugin != null) {
+            KeyService.confirmPendingAsync(plugin, player)
+                    .whenComplete((result, error) -> sendRedeemFeedbackAsync(plugin, player,
+                            error == null ? result : KeyService.RedeemResult.ERROR, ""));
+        } else {
+            KeyService.RedeemResult result = KeyService.confirmPending(player);
+            sendRedeemFeedback(player, result, "");
+        }
         return true;
     }
 
     public static void sendRedeemFeedback(Player player, KeyService.RedeemResult result, String key) {
+        KeyRecord record = null;
+        if (result == KeyService.RedeemResult.SUCCESS || result == KeyService.RedeemResult.CONFIRMATION_REQUIRED) {
+            record = PersistenceManager.getKey(key.trim().toUpperCase(Locale.ROOT));
+            if (record == null) record = PersistenceManager.getKey(key.trim());
+        }
+        sendRedeemFeedback(player, result, record);
+    }
+
+    public static void sendRedeemFeedbackAsync(org.bukkit.plugin.Plugin plugin, Player player,
+                                               KeyService.RedeemResult result, String key) {
+        if (plugin == null) {
+            sendRedeemFeedback(player, result, key);
+            return;
+        }
+        PersistenceManager.executeAsync(() -> {
+            if (result != KeyService.RedeemResult.SUCCESS && result != KeyService.RedeemResult.CONFIRMATION_REQUIRED) {
+                return null;
+            }
+            KeyRecord record = PersistenceManager.getKey(key.trim().toUpperCase(Locale.ROOT));
+            return record == null ? PersistenceManager.getKey(key.trim()) : record;
+        }).thenAccept(record -> VipService.runOnServerAsync(plugin, player, () -> {
+            sendRedeemFeedback(player, result, record);
+            return null;
+        }));
+    }
+
+    private static void sendRedeemFeedback(Player player, KeyService.RedeemResult result, KeyRecord record) {
         String msg;
         switch (result) {
             case SUCCESS:
-                KeyRecord successRecord = PersistenceManager.getKey(key.trim().toUpperCase(Locale.ROOT));
-                if (successRecord == null) successRecord = PersistenceManager.getKey(key.trim());
-                if (successRecord != null && "reward".equalsIgnoreCase(successRecord.getType())) {
-                    var rewardDef = EasyVipConfig.rewardKeys.list.get(successRecord.getRewardKeyId());
+                if (record != null && "reward".equalsIgnoreCase(record.getType())) {
+                    var rewardDef = EasyVipConfig.rewardKeys.list.get(record.getRewardKeyId());
                     Map<String, String> rewardContext = new HashMap<>();
-                    rewardContext.put("reward_display", rewardDef != null ? rewardDef.displayName : successRecord.getRewardKeyId());
+                    rewardContext.put("reward_display", rewardDef != null ? rewardDef.displayName : record.getRewardKeyId());
                     msg = EasyVipConfig.messages.prefix + ActionExecutor.resolvePlaceholders(
                             EasyVipConfig.messages.rewardGiven, rewardContext);
                 } else {
@@ -279,23 +316,21 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 msg = EasyVipConfig.messages.prefix + EasyVipConfig.messages.keyBoundToOtherPlayer;
                 break;
             case CONFIRMATION_REQUIRED: {
-                KeyRecord rec = PersistenceManager.getKey(key.trim().toUpperCase(Locale.ROOT));
-                if (rec == null) rec = PersistenceManager.getKey(key.trim());
                 String tierDisplay = "";
                 String duration = "";
                 String rewardDisplay = "";
                 boolean benefitKey = false;
-                if (rec != null) {
-                    if (rec.getType().equalsIgnoreCase("vip")) {
-                        var tierDef = EasyVipConfig.tiers.list.get(rec.getTierId());
-                        tierDisplay = (tierDef != null) ? tierDef.displayName : rec.getTierId();
-                        duration = rec.getDuration();
-                    } else if (rec.getType().equalsIgnoreCase("custom")) {
+                if (record != null) {
+                    if (record.getType().equalsIgnoreCase("vip")) {
+                        var tierDef = EasyVipConfig.tiers.list.get(record.getTierId());
+                        tierDisplay = (tierDef != null) ? tierDef.displayName : record.getTierId();
+                        duration = record.getDuration();
+                    } else if (record.getType().equalsIgnoreCase("custom")) {
                         rewardDisplay = EasyVipConfig.localized("Custom Reward", "Recompensa Personalizada");
                         benefitKey = true;
                     } else {
-                        var rkDef = EasyVipConfig.rewardKeys.list.get(rec.getRewardKeyId());
-                        rewardDisplay = (rkDef != null) ? rkDef.displayName : (rec.getRewardKeyId() != null ? rec.getRewardKeyId() : EasyVipConfig.localized("Reward", "Recompensa"));
+                        var rkDef = EasyVipConfig.rewardKeys.list.get(record.getRewardKeyId());
+                        rewardDisplay = (rkDef != null) ? rkDef.displayName : (record.getRewardKeyId() != null ? record.getRewardKeyId() : EasyVipConfig.localized("Reward", "Recompensa"));
                         benefitKey = true;
                     }
                 }
@@ -446,7 +481,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip variant choose <package> <variant>", "Uso: /easyvip variant choose <pacote> <variante>"));
                     return true;
                 }
-                PackageService.chooseVariant(player, args.get(1), args.get(2));
+                if (plugin != null) {
+                    PackageService.chooseVariantAsync(plugin, player, args.get(1), args.get(2))
+                            .exceptionally(error -> false);
+                } else {
+                    PackageService.chooseVariant(player, args.get(1), args.get(2));
+                }
                 return true;
 
             case "pending": {
@@ -942,7 +982,11 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
                 String pkgId = args.get(2);
-                PackageService.givePackage(p, pkgId);
+                if (plugin != null) {
+                    PackageService.givePackageAsync(plugin, p, pkgId).exceptionally(error -> false);
+                } else {
+                    PackageService.givePackage(p, pkgId);
+                }
                 return true;
             }
 

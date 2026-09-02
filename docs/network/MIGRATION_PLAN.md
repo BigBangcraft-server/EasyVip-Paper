@@ -58,9 +58,8 @@ Status: implementation in progress.
   and operations/deployment documentation.
 * Disposable MySQL 8.4, MariaDB 11.4, and Redis 7.4 restart labs passed on
   2026-09-02; CI also runs the database compatibility matrix.
-* Remaining: asynchronous composition for key/package mutations, production
-  certificate/trust review, proxy/backend trust review, performance measurements,
-  and production loader smoke tests.
+* Remaining: production certificate/trust review, proxy/backend trust review,
+  performance measurements, and production loader smoke tests.
 
 ## Exit criteria for the next goal
 

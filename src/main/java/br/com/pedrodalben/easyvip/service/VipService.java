@@ -1044,7 +1044,7 @@ public final class VipService {
         evaluateActiveVip(uuid, registry, player, playerName);
     }
 
-    private static <T> CompletionStage<T> runOnServerAsync(Plugin plugin, Player player, Supplier<T> action) {
+    public static <T> CompletionStage<T> runOnServerAsync(Plugin plugin, Player player, Supplier<T> action) {
         CompletableFuture<T> result = new CompletableFuture<>();
         Runnable task = () -> {
             try {

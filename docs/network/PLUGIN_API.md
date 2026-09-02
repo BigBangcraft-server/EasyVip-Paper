@@ -31,8 +31,8 @@ memory-only, while SQL-backed misses remain compatibility synchronous APIs for
 off-thread callers. Paper join/expiration flows use the bounded persistence
 executor and marshal Bukkit actions back to the player scheduler.
 The same scheduling boundary is used by Paper VIP add/remove/active command
-mutations; key/package redemption remains a compatibility path until its
-last-mile actions are split from the database claim.
+mutations, key redemption, and package/variant claims; last-mile Bukkit actions
+are scheduled back to the owning player/global scheduler after the claim.
 
 The API version is `1.1`. Consumers should depend on capability names and
 typed accessors. They should not call `VipService`, inspect `PlayerVipRecord`,

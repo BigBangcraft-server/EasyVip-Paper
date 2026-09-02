@@ -43,10 +43,10 @@ controls belong to GOAL 06 remain explicitly open.
   coupling.
 * Redis payloads are untrusted transport data; Pub/Sub can duplicate, delay,
   reorder, or disappear during an outage.
-* Legacy synchronous key/package admin mutations can still occupy a server
-  thread during SQL latency; full async command composition remains open. Join,
-  expiration, and VIP add/remove/active persistence use a bounded executor and
-  scheduler-marshalled actions.
+* JSON mode remains a compatibility fallback with JVM-local blob locking; SQL
+  mode is required for distributed authority. Paper key/package claims now use
+  a bounded executor and scheduler-marshalled last-mile actions. Legacy
+  scripted `give_package` actions still use the synchronous compatibility API.
 
 ## Required mitigations before network use
 
