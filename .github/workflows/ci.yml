@@ -32,6 +32,18 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: easyvip-ci
+          MARIADB_DATABASE: easyvip
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -uroot -peasyvip-ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -48,6 +60,12 @@ jobs:
           EASYVIP_TEST_JDBC_USER: root
           EASYVIP_TEST_JDBC_PASSWORD: easyvip-ci
           EASYVIP_TEST_REDIS_URI: redis://127.0.0.1:6379
+      - name: MariaDB concurrency tests
+        run: ./gradlew test --no-daemon --rerun-tasks --tests br.com.pedrodalben.easyvip.persistence.SqlConcurrencyTest --stacktrace --console=plain
+        env:
+          EASYVIP_TEST_JDBC_URL: 'jdbc:mysql://127.0.0.1:3307/easyvip?sslMode=REQUIRED&allowPublicKeyRetrieval=false'
+          EASYVIP_TEST_JDBC_USER: root
+          EASYVIP_TEST_JDBC_PASSWORD: easyvip-ci
 
   dependency-review:
     if: github.event_name == 'pull_request'

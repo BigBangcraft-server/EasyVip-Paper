@@ -1,4 +1,4 @@
-# Redis transport (GOAL 04)
+# Redis transport (GOAL 04-06)
 
 Redis is an optional transport for cache invalidation, lifecycle events, and
 ephemeral node visibility. MySQL/SQL remains the authoritative entitlement
@@ -20,6 +20,9 @@ Redis is disabled by default for compatibility. Enable it in the generated
 `network.toml` only after network credentials/TLS and a reachable endpoint are
 ready. If startup, ping, publish, or subscribe fails, SQL-backed capability
 checks continue and the local TTL cache remains safe.
+
+CI executes the Pub/Sub and node-heartbeat integration tests against Redis 7.4.
+Restart/recovery and production ACL/TLS drills remain deployment gates.
 
 ## Node heartbeat
 

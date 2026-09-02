@@ -16,3 +16,7 @@ transactions, row locks, compare-and-set versions, or affected-row transitions.
 Before production migration: take a backup, run the plugin against a staging
 copy, verify legacy counts, then exercise key/package/expiration races on the
 actual MySQL/MariaDB version.
+
+CI runs the SQL concurrency suite against MySQL 8.4 and MariaDB 11.4 with TLS
+required, in addition to the fast H2 suite. This is compatibility evidence, not
+a substitute for production failover drills.
