@@ -74,6 +74,13 @@ public final class VipService {
         return addVip(uuid, null, tierId, durationStr, operator, false);
     }
 
+    public static CompletionStage<Boolean> addVipAsync(Plugin plugin, UUID uuid, String knownPlayerName,
+                                                        String tierId, String durationStr, String operator,
+                                                        boolean activateWhileOffline) {
+        return PersistenceManager.executeAsync(() -> addVipInternal(plugin, uuid, knownPlayerName, tierId,
+                durationStr, operator, activateWhileOffline));
+    }
+
     public static boolean addFakePlayerVip(String playerName, String tierId, String durationStr, String operator) {
         if (playerName == null || playerName.isBlank()) {
             return false;
@@ -83,8 +90,24 @@ public final class VipService {
         return addVip(uuid, playerName, tierId, durationStr, operator, true);
     }
 
+    public static CompletionStage<Boolean> addFakePlayerVipAsync(Plugin plugin, String playerName,
+                                                                  String tierId, String durationStr,
+                                                                  String operator) {
+        if (playerName == null || playerName.isBlank()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        UUID uuid = UUID.nameUUIDFromBytes(("bigbang-fake-player:" + playerName.toLowerCase(Locale.ROOT))
+                .getBytes(StandardCharsets.UTF_8));
+        return addVipAsync(plugin, uuid, playerName, tierId, durationStr, operator, true);
+    }
+
     public static boolean addVip(UUID uuid, String knownPlayerName, String tierId,
                                  String durationStr, String operator, boolean activateWhileOffline) {
+        return addVipInternal(null, uuid, knownPlayerName, tierId, durationStr, operator, activateWhileOffline);
+    }
+
+    private static boolean addVipInternal(Plugin plugin, UUID uuid, String knownPlayerName, String tierId,
+                                          String durationStr, String operator, boolean activateWhileOffline) {
         EasyVipConfig.VipTierDefinition tierDef = EasyVipConfig.tiers.list.get(tierId);
         if (tierDef == null) {
             return false;
@@ -99,10 +122,21 @@ public final class VipService {
         long now = System.currentTimeMillis();
 
         PlayerVipRecord record = registry.getVips().get(tierId);
-        Player player = getPlayerSafely(uuid);
-        boolean isOnline = player != null && player.isOnline();
-        String targetName = knownPlayerName != null ? knownPlayerName : resolvePlayerName(uuid);
-        if (isOnline) {
+        Player player = plugin == null
+                ? getPlayerSafely(uuid)
+                : runOnServerAndWait(plugin, null, () -> getPlayerSafely(uuid));
+        boolean isOnline = player != null;
+        String targetName = knownPlayerName;
+        if (targetName == null || targetName.isBlank()) {
+            targetName = plugin == null && player != null ? player.getName() : registry.getPlayerName();
+            if ((targetName == null || targetName.isBlank()) && plugin == null) {
+                targetName = resolvePlayerName(uuid);
+            }
+            if (targetName == null || targetName.isBlank()) {
+                targetName = uuid.toString();
+            }
+        }
+        if (isOnline && plugin == null) {
             targetName = player.getName();
         }
 
@@ -121,8 +155,8 @@ public final class VipService {
 
             enrichVipContext(ctx, uuid, targetName, tierDef, duration, now, expiry);
             if (isOnline || activateWhileOffline) {
-                executeVipActivationFlow(uuid, player, targetName, tierDef, ctx, "vip_activate", tierDef.messages.activated);
-                broadcastVipActivation(targetName, tierDef.displayName);
+                runVipActivation(plugin, uuid, player, targetName, tierDef, ctx,
+                        "vip_activate", tierDef.messages.activated);
             } else {
                 record.setPendingActivateActions(true);
             }
@@ -135,8 +169,8 @@ public final class VipService {
                     record.setStartTime(now);
                     enrichVipContext(ctx, uuid, targetName, tierDef, duration, now, expiry);
                     if (isOnline || activateWhileOffline) {
-                        executeVipActivationFlow(uuid, player, targetName, tierDef, ctx, "vip_replace", tierDef.messages.activated);
-                        broadcastVipActivation(targetName, tierDef.displayName);
+                        runVipActivation(plugin, uuid, player, targetName, tierDef, ctx,
+                                "vip_replace", tierDef.messages.activated);
                     } else {
                         record.setPendingActivateActions(true);
                     }
@@ -149,7 +183,8 @@ public final class VipService {
                     // Already permanent
                     enrichVipContext(ctx, uuid, targetName, tierDef, duration, now, record.getExpiryTime());
                     if (isOnline || activateWhileOffline) {
-                        executeVipActivationFlow(uuid, player, targetName, tierDef, ctx, "vip_stack_perm", EasyVipConfig.messages.vipExtended);
+                        runVipActivation(plugin, uuid, player, targetName, tierDef, ctx,
+                                "vip_stack_perm", EasyVipConfig.messages.vipExtended);
                     } else {
                         record.setPendingActivateActions(true);
                     }
@@ -158,7 +193,8 @@ public final class VipService {
                     record.setExpiryTime(-1);
                     enrichVipContext(ctx, uuid, targetName, tierDef, duration, now, record.getExpiryTime());
                     if (isOnline || activateWhileOffline) {
-                        executeVipActivationFlow(uuid, player, targetName, tierDef, ctx, "vip_upgrade_perm", EasyVipConfig.messages.vipExtended);
+                        runVipActivation(plugin, uuid, player, targetName, tierDef, ctx,
+                                "vip_upgrade_perm", EasyVipConfig.messages.vipExtended);
                     } else {
                         record.setPendingActivateActions(true);
                     }
@@ -180,7 +216,8 @@ public final class VipService {
                     record.setExpiryTime(newExpiry);
                     enrichVipContext(ctx, uuid, targetName, tierDef, addedDuration, now, newExpiry);
                     if (isOnline || activateWhileOffline) {
-                        executeVipActivationFlow(uuid, player, targetName, tierDef, ctx, "vip_extend", EasyVipConfig.messages.vipExtended);
+                        runVipActivation(plugin, uuid, player, targetName, tierDef, ctx,
+                                "vip_extend", EasyVipConfig.messages.vipExtended);
                     } else {
                         record.setPendingActivateActions(true);
                     }
@@ -192,7 +229,16 @@ public final class VipService {
             record.setPendingActivateActions(false);
         }
         registry.setPlayerName(targetName);
-        evaluateActiveVip(uuid, registry);
+        if (plugin == null) {
+            evaluateActiveVip(uuid, registry);
+        } else {
+            final PlayerVipRegistry activeRegistry = registry;
+            final String activeName = targetName;
+            runOnServerAndWait(plugin, player, () -> {
+                evaluateActiveVip(uuid, activeRegistry, player, activeName);
+                return null;
+            });
+        }
         if (activateWhileOffline) {
             registry.setLastObservedActiveVip(registry.getVips().values().stream()
                     .filter(PlayerVipRecord::isActive)
@@ -204,7 +250,15 @@ public final class VipService {
 
         PersistenceManager.log(operator, "add_vip", "VIP tier " + tierId + " added to " + targetName + " with duration " + durationStr);
 
-        fireEventSafely(new VipActivateEvent(uuid, targetName, tierId, duration, operator));
+        VipActivateEvent event = new VipActivateEvent(uuid, targetName, tierId, duration, operator);
+        if (plugin == null) {
+            fireEventSafely(event);
+        } else {
+            runOnServerAndWait(plugin, player, () -> {
+                fireEventSafely(event);
+                return null;
+            });
+        }
 
         return true;
     }
@@ -216,6 +270,21 @@ public final class VipService {
         String message = ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.vipActivatedBroadcast, ctx);
         if (message != null && !message.isEmpty()) {
             TextUtil.broadcast(message);
+        }
+    }
+
+    private static void runVipActivation(Plugin plugin, UUID uuid, Player player, String playerName,
+                                         EasyVipConfig.VipTierDefinition tierDef, Map<String, String> ctx,
+                                         String source, String messageTemplate) {
+        Supplier<Void> activation = () -> {
+            executeVipActivationFlow(uuid, player, playerName, tierDef, ctx, source, messageTemplate);
+            broadcastVipActivation(playerName, tierDef.displayName);
+            return null;
+        };
+        if (plugin == null) {
+            activation.get();
+        } else {
+            runOnServerAndWait(plugin, player, activation);
         }
     }
 
@@ -461,6 +530,15 @@ public final class VipService {
     }
 
     public static boolean removeVip(UUID uuid, String tierId, String operator) {
+        return removeVipInternal(null, uuid, tierId, operator);
+    }
+
+    public static CompletionStage<Boolean> removeVipAsync(Plugin plugin, UUID uuid, String tierId,
+                                                           String operator) {
+        return PersistenceManager.executeAsync(() -> removeVipInternal(plugin, uuid, tierId, operator));
+    }
+
+    private static boolean removeVipInternal(Plugin plugin, UUID uuid, String tierId, String operator) {
         PlayerVipRegistry registry = PersistenceManager.getPlayerVips(uuid);
         if (registry == null) {
             return false;
@@ -471,45 +549,84 @@ public final class VipService {
             return false;
         }
 
-        Player player = getPlayerSafely(uuid);
+        Player player = plugin == null
+                ? getPlayerSafely(uuid)
+                : runOnServerAndWait(plugin, null, () -> getPlayerSafely(uuid));
         EasyVipConfig.VipTierDefinition tierDef = EasyVipConfig.tiers.list.get(tierId);
+        String targetName = plugin == null && player != null ? player.getName() : registry.getPlayerName();
+        if (targetName == null || targetName.isBlank()) {
+            targetName = plugin == null ? resolvePlayerName(uuid) : uuid.toString();
+        }
+        final String actionPlayerName = targetName;
 
         if (player != null && tierDef != null) {
             Map<String, String> ctx = new HashMap<>();
             ctx.put("tier_id", tierId);
             ctx.put("tier_display", tierDef.displayName);
-            ctx.put("player", resolvePlayerName(uuid));
+            ctx.put("player", targetName);
             ctx.put("player_uuid", uuid.toString());
 
-            if (record.isActive()) {
-                executeUnsetActiveActions(uuid, player, tierId, tierDef, ctx, "vip_remove_unset_active");
-            } else {
-                executeUnsetActiveActions(uuid, player, tierId, tierDef, ctx, "vip_remove_unset_active_offline");
-            }
-            executeTierActions(uuid, resolvePlayerName(uuid), player, tierDef.actionsOnRemove, ctx, "vip_remove");
+            Supplier<Void> actions = () -> {
+                if (record.isActive()) {
+                    executeUnsetActiveActions(uuid, player, tierId, tierDef, ctx, "vip_remove_unset_active");
+                } else {
+                    executeUnsetActiveActions(uuid, player, tierId, tierDef, ctx, "vip_remove_unset_active_offline");
+                }
+                executeTierActions(uuid, actionPlayerName, player, tierDef.actionsOnRemove, ctx, "vip_remove");
+                return null;
+            };
+            if (plugin == null) actions.get(); else runOnServerAndWait(plugin, player, actions);
         } else if (tierDef != null) {
             Map<String, String> ctx = new HashMap<>();
             ctx.put("tier_id", tierId);
             ctx.put("tier_display", tierDef.displayName);
-            ctx.put("player", resolvePlayerName(uuid));
+            ctx.put("player", targetName);
             ctx.put("player_uuid", uuid.toString());
-            executeUnsetActiveActions(uuid, null, tierId, tierDef, ctx, "vip_remove_offline_unset");
-            executeTierActions(uuid, resolvePlayerName(uuid), null, tierDef.actionsOnRemove, ctx, "vip_remove_offline");
+            Supplier<Void> actions = () -> {
+                executeUnsetActiveActions(uuid, null, tierId, tierDef, ctx, "vip_remove_offline_unset");
+                executeTierActions(uuid, actionPlayerName, null, tierDef.actionsOnRemove, ctx, "vip_remove_offline");
+                return null;
+            };
+            if (plugin == null) actions.get(); else runOnServerAndWait(plugin, null, actions);
         }
 
-        registry.setPlayerName(resolvePlayerName(uuid));
-        evaluateActiveVip(uuid, registry);
+        registry.setPlayerName(targetName);
+        if (plugin == null) {
+            evaluateActiveVip(uuid, registry);
+        } else {
+            final PlayerVipRegistry activeRegistry = registry;
+            runOnServerAndWait(plugin, player, () -> {
+                evaluateActiveVip(uuid, activeRegistry, player, actionPlayerName);
+                return null;
+            });
+        }
         PersistenceManager.updatePlayerVips(uuid, registry);
 
-        String targetName = (player != null) ? player.getName() : uuid.toString();
         PersistenceManager.log(operator, "remove_vip", "VIP tier " + tierId + " removed from " + targetName);
 
-        fireEventSafely(new VipExpireEvent(uuid, targetName, tierId));
+        VipExpireEvent event = new VipExpireEvent(uuid, targetName, tierId);
+        if (plugin == null) {
+            fireEventSafely(event);
+        } else {
+            runOnServerAndWait(plugin, player, () -> {
+                fireEventSafely(event);
+                return null;
+            });
+        }
 
         return true;
     }
 
     public static boolean setActiveVip(UUID uuid, String tierId, String operator) {
+        return setActiveVipInternal(null, uuid, tierId, operator);
+    }
+
+    public static CompletionStage<Boolean> setActiveVipAsync(Plugin plugin, UUID uuid, String tierId,
+                                                              String operator) {
+        return PersistenceManager.executeAsync(() -> setActiveVipInternal(plugin, uuid, tierId, operator));
+    }
+
+    private static boolean setActiveVipInternal(Plugin plugin, UUID uuid, String tierId, String operator) {
         if (!EasyVipConfig.common.allowPlayerActiveSelection) {
             return false;
         }
@@ -524,41 +641,52 @@ public final class VipService {
             return false;
         }
 
-        Player player = getPlayerSafely(uuid);
+        Player player = plugin == null
+                ? getPlayerSafely(uuid)
+                : runOnServerAndWait(plugin, null, () -> getPlayerSafely(uuid));
+        String playerName = plugin == null && player != null ? player.getName() : registry.getPlayerName();
+        if (playerName == null || playerName.isBlank()) {
+            playerName = plugin == null ? resolvePlayerName(uuid) : uuid.toString();
+        }
+        final String actionPlayerName = playerName;
 
-        for (PlayerVipRecord record : registry.getVips().values()) {
-            if (record.isActive() && !record.getTierId().equals(tierId)) {
-                record.setActive(false);
-                EasyVipConfig.VipTierDefinition oldDef = EasyVipConfig.tiers.list.get(record.getTierId());
-                if (oldDef != null) {
-                    Map<String, String> ctx = new HashMap<>();
-                    ctx.put("tier_id", record.getTierId());
-                    ctx.put("tier_display", oldDef.displayName);
-                    ctx.put("player", resolvePlayerName(uuid));
-                    ctx.put("player_uuid", uuid.toString());
-                    executeUnsetActiveActions(uuid, player, record.getTierId(), oldDef, ctx, "vip_active_unset");
+        Supplier<Void> actions = () -> {
+            for (PlayerVipRecord record : registry.getVips().values()) {
+                if (record.isActive() && !record.getTierId().equals(tierId)) {
+                    record.setActive(false);
+                    EasyVipConfig.VipTierDefinition oldDef = EasyVipConfig.tiers.list.get(record.getTierId());
+                    if (oldDef != null) {
+                        Map<String, String> ctx = new HashMap<>();
+                        ctx.put("tier_id", record.getTierId());
+                        ctx.put("tier_display", oldDef.displayName);
+                        ctx.put("player", actionPlayerName);
+                        ctx.put("player_uuid", uuid.toString());
+                        executeUnsetActiveActions(uuid, player, record.getTierId(), oldDef, ctx, "vip_active_unset");
+                    }
                 }
             }
-        }
 
-        if (!targetRecord.isActive()) {
-            targetRecord.setActive(true);
-            EasyVipConfig.VipTierDefinition newDef = EasyVipConfig.tiers.list.get(tierId);
-            if (newDef != null) {
-                Map<String, String> ctx = new HashMap<>();
-                ctx.put("tier_id", tierId);
-                ctx.put("tier_display", newDef.displayName);
-                ctx.put("player", resolvePlayerName(uuid));
-                ctx.put("player_uuid", uuid.toString());
-                executeSetActiveActions(uuid, player, newDef, ctx, "vip_active_set");
+            if (!targetRecord.isActive()) {
+                targetRecord.setActive(true);
+                EasyVipConfig.VipTierDefinition newDef = EasyVipConfig.tiers.list.get(tierId);
+                if (newDef != null) {
+                    Map<String, String> ctx = new HashMap<>();
+                    ctx.put("tier_id", tierId);
+                    ctx.put("tier_display", newDef.displayName);
+                    ctx.put("player", actionPlayerName);
+                    ctx.put("player_uuid", uuid.toString());
+                    executeSetActiveActions(uuid, player, newDef, ctx, "vip_active_set");
+                }
             }
-        }
+            return null;
+        };
+        if (plugin == null) actions.get(); else runOnServerAndWait(plugin, player, actions);
 
         if (player != null) {
             registry.setLastObservedActiveVip(tierId);
         }
 
-        registry.setPlayerName(resolvePlayerName(uuid));
+        registry.setPlayerName(actionPlayerName);
         PersistenceManager.updatePlayerVips(uuid, registry);
         PersistenceManager.log(operator, "change_active_vip", "Set active VIP tier " + tierId + " for " + uuid);
         return true;
@@ -674,14 +802,21 @@ public final class VipService {
                 }
                 return players;
             });
+            Map<UUID, String> onlineNames = runOnServerAndWait(plugin, null, () -> {
+                Map<UUID, String> names = new HashMap<>();
+                for (Player online : Bukkit.getOnlinePlayers()) {
+                    names.put(online.getUniqueId(), online.getName());
+                }
+                return names;
+            });
             CompletableFuture<Integer> total = CompletableFuture.completedFuture(0);
             for (Map.Entry<UUID, PlayerVipRegistry> entry : snapshot.entrySet()) {
                 UUID uuid = entry.getKey();
                 PlayerVipRegistry registry = entry.getValue();
                 total = total.thenCompose(count -> {
                     Player online = onlinePlayers.get(uuid);
-                    String playerName = online != null && online.getName() != null
-                            ? online.getName()
+                    String playerName = online != null && onlineNames.get(uuid) != null
+                            ? onlineNames.get(uuid)
                             : (registry.getPlayerName() == null || registry.getPlayerName().isBlank()
                             ? uuid.toString() : registry.getPlayerName());
                     return expireDueVipsForRegistryAsync(plugin, uuid, playerName, online, registry)

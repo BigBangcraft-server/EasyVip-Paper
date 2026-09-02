@@ -413,15 +413,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             return true;
         }
 
-        boolean success = VipService.setActiveVip(player.getUniqueId(), tier, player.getName());
-        if (success) {
-            EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
-            String display = (def != null) ? def.displayName : tier;
-            Map<String, String> context = new HashMap<>();
-            context.put("tier_display", display);
-            TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.activeVipChanged, context));
+        if (plugin != null) {
+            VipService.setActiveVipAsync(plugin, player.getUniqueId(), tier, player.getName())
+                    .whenComplete((success, error) -> runOnServer(() -> sendActiveVipResult(
+                            player, tier, error == null && Boolean.TRUE.equals(success))));
         } else {
-            TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.activeVipNotOwned, new HashMap<>()));
+            sendActiveVipResult(player, tier, VipService.setActiveVip(player.getUniqueId(), tier, player.getName()));
         }
         return true;
     }
@@ -595,11 +592,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         Player player = Bukkit.getPlayer(playerName);
         UUID uuid = player != null ? player.getUniqueId() : Bukkit.getOfflinePlayer(playerName).getUniqueId();
 
-        boolean success = VipService.setActiveVip(uuid, tier, sender.getName());
-        if (success) {
-            TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Active VIP changed successfully.", "VIP ativo alterado com sucesso."));
+        if (plugin != null) {
+            VipService.setActiveVipAsync(plugin, uuid, tier, sender.getName())
+                    .whenComplete((success, error) -> runOnServer(() -> sendActiveSetResult(
+                            sender, error == null && Boolean.TRUE.equals(success))));
         } else {
-            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Could not change the active VIP.", "Não foi possível alterar o VIP ativo."));
+            sendActiveSetResult(sender, VipService.setActiveVip(uuid, tier, sender.getName()));
         }
         return true;
     }
@@ -856,20 +854,13 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
 
-                boolean success = VipService.addVip(uuid, targetName, tier, duration, sender.getName(), false);
-                if (success) {
-                    EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
-                    String display = (def != null) ? def.displayName : tier;
-                    Map<String, String> context = new HashMap<>();
-                    context.put("tier_display", display);
-                    context.put("player", targetName);
-                    context.put("duration", duration);
-                    TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.vipSet, context));
+                if (plugin != null) {
+                    VipService.addVipAsync(plugin, uuid, targetName, tier, duration, sender.getName(), false)
+                            .whenComplete((success, error) -> runOnServer(() -> sendVipSetResult(
+                                    sender, targetName, tier, duration, error == null && Boolean.TRUE.equals(success))));
                 } else {
-                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
-                            "Error adding VIP. Check that the tier exists or that stacking rules do not block the operation.",
-                            "Erro ao adicionar VIP. Verifique se o tier existe ou se as regras de stacking bloqueiam a operação."
-                    ));
+                    sendVipSetResult(sender, targetName, tier, duration,
+                            VipService.addVip(uuid, targetName, tier, duration, sender.getName(), false));
                 }
                 return true;
             }
@@ -894,19 +885,13 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
 
-                boolean success = VipService.addFakePlayerVip(playerName, tier, duration, sender.getName());
-                if (success) {
-                    EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
-                    Map<String, String> context = new HashMap<>();
-                    context.put("tier_display", def != null ? def.displayName : tier);
-                    context.put("player", playerName);
-                    context.put("duration", duration);
-                    TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.vipSet, context));
+                if (plugin != null) {
+                    VipService.addFakePlayerVipAsync(plugin, playerName, tier, duration, sender.getName())
+                            .whenComplete((success, error) -> runOnServer(() -> sendVipSetResult(
+                                    sender, playerName, tier, duration, error == null && Boolean.TRUE.equals(success))));
                 } else {
-                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
-                            "Error adding VIP. Check that the tier exists or that stacking rules do not block the operation.",
-                            "Erro ao adicionar VIP. Verifique se o tier existe ou se as regras de stacking bloqueiam a operação."
-                    ));
+                    sendVipSetResult(sender, playerName, tier, duration,
+                            VipService.addFakePlayerVip(playerName, tier, duration, sender.getName()));
                 }
                 return true;
             }
@@ -927,15 +912,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
 
-                boolean success = VipService.removeVip(uuid, tier, sender.getName());
-                if (success) {
-                    EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
-                    Map<String, String> context = new HashMap<>();
-                    context.put("tier_display", def != null ? def.displayName : tier);
-                    context.put("player", targetName);
-                    TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.vipRemoved, context));
+                if (plugin != null) {
+                    VipService.removeVipAsync(plugin, uuid, tier, sender.getName())
+                            .whenComplete((success, error) -> runOnServer(() -> sendVipRemoveResult(
+                                    sender, targetName, tier, error == null && Boolean.TRUE.equals(success))));
                 } else {
-                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("The player does not have this active VIP tier.", "O jogador não possui este tier VIP ativo."));
+                    sendVipRemoveResult(sender, targetName, tier, VipService.removeVip(uuid, tier, sender.getName()));
                 }
                 return true;
             }
@@ -1126,6 +1108,58 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             }
         } catch (IllegalStateException ignored) {
             task.run();
+        }
+    }
+
+    private void sendVipSetResult(CommandSender sender, String playerName, String tier,
+                                  String duration, boolean success) {
+        if (success) {
+            EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
+            Map<String, String> context = new HashMap<>();
+            context.put("tier_display", def != null ? def.displayName : tier);
+            context.put("player", playerName);
+            context.put("duration", duration);
+            TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.messages.vipSet, context));
+            return;
+        }
+        TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                "Error adding VIP. Check that the tier exists or that stacking rules do not block the operation.",
+                "Erro ao adicionar VIP. Verifique se o tier existe ou se as regras de stacking bloqueiam a operação."
+        ));
+    }
+
+    private void sendActiveVipResult(Player player, String tier, boolean success) {
+        if (success) {
+            EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
+            Map<String, String> context = new HashMap<>();
+            context.put("tier_display", def != null ? def.displayName : tier);
+            TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.messages.activeVipChanged, context));
+        } else {
+            TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.messages.activeVipNotOwned, new HashMap<>()));
+        }
+    }
+
+    private void sendActiveSetResult(CommandSender sender, boolean success) {
+        TextUtil.sendMessage(sender, success
+                ? "§a" + EasyVipConfig.localized("Active VIP changed successfully.", "VIP ativo alterado com sucesso.")
+                : "§c" + EasyVipConfig.localized("Could not change the active VIP.", "Não foi possível alterar o VIP ativo."));
+    }
+
+    private void sendVipRemoveResult(CommandSender sender, String playerName, String tier, boolean success) {
+        if (success) {
+            EasyVipConfig.VipTierDefinition def = EasyVipConfig.tiers.list.get(tier);
+            Map<String, String> context = new HashMap<>();
+            context.put("tier_display", def != null ? def.displayName : tier);
+            context.put("player", playerName);
+            TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.messages.vipRemoved, context));
+        } else {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "The player does not have this active VIP tier.",
+                    "O jogador não possui este tier VIP ativo."));
         }
     }
 
