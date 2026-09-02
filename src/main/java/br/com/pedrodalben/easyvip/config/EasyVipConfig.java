@@ -1113,12 +1113,22 @@ public final class EasyVipConfig {
         public String sqlUrl = "jdbc:mysql://localhost:3306/easyvip";
         public String sqlUsername = "";
         public String sqlPassword = "";
+        public String sqlUsernameEnv = "EASYVIP_SQL_USERNAME";
+        public String sqlPasswordEnv = "EASYVIP_SQL_PASSWORD";
         public int sqlPoolSize = 10;
         public int sqlMinimumIdle = 2;
         public int sqlConnectionTimeoutSeconds = 10;
         public int sqlIdleTimeoutSeconds = 600;
         public int sqlMaxLifetimeMinutes = 30;
         public int sqlLeakDetectionThresholdSeconds = 0;
+
+        public String sqlUsernameValue() {
+            return resolveEnvironmentValue(sqlUsernameEnv, sqlUsername);
+        }
+
+        public String sqlPasswordValue() {
+            return resolveEnvironmentValue(sqlPasswordEnv, sqlPassword);
+        }
     }
 
     private static void loadIntegrations() throws IllegalArgumentException, IOException {
@@ -1135,6 +1145,8 @@ public final class EasyVipConfig {
             map.put("sql_url", integrations.sqlUrl);
             map.put("sql_username", integrations.sqlUsername);
             map.put("sql_password", integrations.sqlPassword);
+            map.put("sql_username_env", integrations.sqlUsernameEnv);
+            map.put("sql_password_env", integrations.sqlPasswordEnv);
             map.put("sql_pool_size", integrations.sqlPoolSize);
             map.put("sql_minimum_idle", integrations.sqlMinimumIdle);
             map.put("sql_connection_timeout_seconds", integrations.sqlConnectionTimeoutSeconds);
@@ -1155,6 +1167,8 @@ public final class EasyVipConfig {
         integrations.sqlUrl = getString(data, "sql_url", integrations.sqlUrl);
         integrations.sqlUsername = getString(data, "sql_username", "");
         integrations.sqlPassword = getString(data, "sql_password", "");
+        integrations.sqlUsernameEnv = getString(data, "sql_username_env", "EASYVIP_SQL_USERNAME");
+        integrations.sqlPasswordEnv = getString(data, "sql_password_env", "EASYVIP_SQL_PASSWORD");
         integrations.sqlPoolSize = getInt(data, "sql_pool_size", 10);
         integrations.sqlMinimumIdle = getInt(data, "sql_minimum_idle", 2);
         integrations.sqlConnectionTimeoutSeconds = getInt(data, "sql_connection_timeout_seconds", 10);
@@ -1616,6 +1630,18 @@ public final class EasyVipConfig {
 
     private static boolean hasVerifyIdentitySslMode(String jdbcUrl) {
         return jdbcUrl != null && jdbcUrl.toLowerCase(Locale.ROOT).contains("sslmode=verify_identity");
+    }
+
+    private static String resolveEnvironmentValue(String envName, String configured) {
+        return resolveEnvironmentValue(envName, configured, System.getenv());
+    }
+
+    static String resolveEnvironmentValue(String envName, String configured,
+                                          Map<String, String> environment) {
+        if (envName != null && !envName.isBlank() && environment != null && environment.containsKey(envName)) {
+            return environment.get(envName);
+        }
+        return configured == null ? "" : configured;
     }
 
     private static boolean validBenefitValue(String type, Object value) {

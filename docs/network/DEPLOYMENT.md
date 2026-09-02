@@ -4,6 +4,8 @@
 * Set a unique `network.node_id`, group, environment, and tags on every node.
 * Use MySQL/MariaDB with least-privilege credentials and
   `sslMode=VERIFY_IDENTITY` for remote connections.
+* Supply SQL credentials with `EASYVIP_SQL_USERNAME` and
+  `EASYVIP_SQL_PASSWORD`; leave inline TOML credentials empty.
 * Use `rediss://` with ACL credentials for remote Redis; keep SQL authoritative.
 * Supply WebStore/HMAC secrets through environment variables and use HTTPS.
 * Keep `command_allowlist_enabled = true` and review every configured command.

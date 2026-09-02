@@ -5,6 +5,8 @@
 * SQL uses HikariCP; the plugin no longer forces `useSSL=false` or public-key
   retrieval. Production remote MySQL/MariaDB configuration is rejected unless
   it uses `sslMode=VERIFY_IDENTITY` in the JDBC URL and a managed trust store.
+  `EASYVIP_SQL_USERNAME` and `EASYVIP_SQL_PASSWORD` take precedence over
+  legacy inline TOML credentials and are never logged.
 * Production Redis endpoints must use `rediss://` unless they are loopback.
   Redis payloads are bounded, versioned, base64-delimited, schema-checked, and
   never treated as entitlement truth.

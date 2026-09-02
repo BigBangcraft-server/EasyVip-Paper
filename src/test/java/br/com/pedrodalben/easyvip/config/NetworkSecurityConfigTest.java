@@ -4,7 +4,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NetworkSecurityConfigTest {
@@ -67,5 +69,16 @@ class NetworkSecurityConfigTest {
         List<String> errors = EasyVipConfig.validate();
 
         assertTrue(errors.stream().anyMatch(error -> error.contains("sslMode=VERIFY_IDENTITY")));
+    }
+
+    @Test
+    void environmentCredentialsTakePrecedenceWithoutLoggingValues() {
+        assertEquals("environment-secret", EasyVipConfig.resolveEnvironmentValue(
+                "EASYVIP_SQL_PASSWORD", "inline-secret",
+                Map.of("EASYVIP_SQL_PASSWORD", "environment-secret")));
+        assertEquals("inline-secret", EasyVipConfig.resolveEnvironmentValue(
+                "EASYVIP_SQL_PASSWORD", "inline-secret", Map.of()));
+        assertEquals("", EasyVipConfig.resolveEnvironmentValue(
+                "EASYVIP_SQL_PASSWORD", "inline-secret", Map.of("EASYVIP_SQL_PASSWORD", "")));
     }
 }

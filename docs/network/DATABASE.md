@@ -3,6 +3,11 @@
 MySQL/MariaDB is the durable source of truth. Normal SQL access goes through the
 HikariCP pool; JDBC connections are not opened with `DriverManager`.
 
+SQL credentials should be supplied through `EASYVIP_SQL_USERNAME` and
+`EASYVIP_SQL_PASSWORD`; those environment values take precedence over the
+legacy `sql_username`/`sql_password` TOML fields. Keep the legacy fields empty
+for new deployments. Values are passed to HikariCP and are never logged.
+
 The additive schema creates V2 player/grant/preference tables, key/package claim
 tables, the delivery ledger, WebStore ledgers, and node visibility records.
 Schema version `1` records the storage foundation and version `2` records the

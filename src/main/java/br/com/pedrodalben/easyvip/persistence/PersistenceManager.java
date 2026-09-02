@@ -58,8 +58,8 @@ public final class PersistenceManager {
             sqlMode = true;
             SqlDatabaseManager.initialize(
                 EasyVipConfig.integrations.sqlUrl,
-                EasyVipConfig.integrations.sqlUsername,
-                EasyVipConfig.integrations.sqlPassword
+                EasyVipConfig.integrations.sqlUsernameValue(),
+                EasyVipConfig.integrations.sqlPasswordValue()
             );
             System.out.println("[EasyVip] SQL persistence enabled");
             return;
@@ -78,8 +78,8 @@ public final class PersistenceManager {
             sqlMode = true;
             SqlDatabaseManager.initialize(
                 EasyVipConfig.integrations.sqlUrl,
-                EasyVipConfig.integrations.sqlUsername,
-                EasyVipConfig.integrations.sqlPassword
+                EasyVipConfig.integrations.sqlUsernameValue(),
+                EasyVipConfig.integrations.sqlPasswordValue()
             );
             System.out.println("[EasyVip] SQL persistence reloaded");
         } else if (sqlMode) {
