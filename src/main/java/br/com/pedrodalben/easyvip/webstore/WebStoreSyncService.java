@@ -19,7 +19,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 public final class WebStoreSyncService {
@@ -28,6 +32,7 @@ public final class WebStoreSyncService {
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
+    private static volatile ExecutorService syncExecutor = newSyncExecutor();
 
     private static Path logFile;
 
@@ -35,6 +40,7 @@ public final class WebStoreSyncService {
     }
 
     public static void init(Path configDir) {
+        ensureExecutor();
         Path dataDir = configDir.resolve("data");
         try {
             Files.createDirectories(dataDir);
@@ -56,18 +62,22 @@ public final class WebStoreSyncService {
             return;
         }
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                int status = sendPlayerSyncWithRetry(uuid, username, ipAddress);
-                if (status == 200 || status == 201) {
-                    log("SYNC_OK | " + username + " | " + uuid + " | HTTP " + status);
+        try {
+            ensureExecutor().execute(() -> {
+                try {
+                    int status = sendPlayerSyncWithRetry(uuid, username, ipAddress);
+                    if (status == 200 || status == 201) {
+                        log("SYNC_OK | " + username + " | " + uuid + " | HTTP " + status);
+                    }
+                } catch (Exception e) {
+                    log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getClass().getSimpleName());
+                    PersistenceManager.log("WebStore", "sync_failed",
+                            "Player " + username + " (" + uuid + "): " + e.getClass().getSimpleName());
                 }
-            } catch (Exception e) {
-                log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getClass().getSimpleName());
-                PersistenceManager.log("WebStore", "sync_failed",
-                        "Player " + username + " (" + uuid + "): " + e.getClass().getSimpleName());
-            }
-        });
+            });
+        } catch (RejectedExecutionException rejected) {
+            log("SYNC_REJECTED | " + uuid + " | executor_saturated");
+        }
     }
 
     public static CompletableFuture<Integer> syncPlayerAsync(UUID uuid, String username, String ipAddress) {
@@ -75,20 +85,25 @@ public final class WebStoreSyncService {
             return CompletableFuture.completedFuture(0);
         }
 
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                int status = sendPlayerSyncWithRetry(uuid, username, ipAddress);
-                if (status == 200 || status == 201) {
-                    log("SYNC_OK | " + username + " | " + uuid + " | HTTP " + status);
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                try {
+                    int status = sendPlayerSyncWithRetry(uuid, username, ipAddress);
+                    if (status == 200 || status == 201) {
+                        log("SYNC_OK | " + username + " | " + uuid + " | HTTP " + status);
+                    }
+                    return status;
+                } catch (Exception e) {
+                    log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getClass().getSimpleName());
+                    PersistenceManager.log("WebStore", "sync_failed",
+                            "Player " + username + " (" + uuid + "): " + e.getClass().getSimpleName());
+                    return -1;
                 }
-                return status;
-            } catch (Exception e) {
-                log("SYNC_FAIL | " + username + " | " + uuid + " | " + e.getClass().getSimpleName());
-                PersistenceManager.log("WebStore", "sync_failed",
-                        "Player " + username + " (" + uuid + "): " + e.getClass().getSimpleName());
-                return -1;
-            }
-        });
+            }, ensureExecutor());
+        } catch (RejectedExecutionException rejected) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("WebStore sync executor is saturated", rejected));
+        }
     }
 
     private static int sendPlayerSyncWithRetry(UUID uuid, String username, String ipAddress) throws Exception {
@@ -197,13 +212,17 @@ public final class WebStoreSyncService {
             return;
         }
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                sendChallenge(uuid, code);
-            } catch (Exception e) {
-                log("CHALLENGE_FAIL | " + uuid + " | " + e.getClass().getSimpleName());
-            }
-        });
+        try {
+            ensureExecutor().execute(() -> {
+                try {
+                    sendChallenge(uuid, code);
+                } catch (Exception e) {
+                    log("CHALLENGE_FAIL | " + uuid + " | " + e.getClass().getSimpleName());
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            log("CHALLENGE_REJECTED | " + uuid + " | executor_saturated");
+        }
     }
 
     private static void sendChallenge(UUID uuid, String code) throws Exception {
@@ -268,6 +287,29 @@ public final class WebStoreSyncService {
         if (EasyVipConfig.common.debug) {
             System.out.println("[EasyVip-WebStore] " + message);
         }
+    }
+
+    /** Stops bounded WebStore work during plugin shutdown; init recreates it on reload. */
+    public static synchronized void stop() {
+        ExecutorService current = syncExecutor;
+        syncExecutor = newSyncExecutor();
+        current.shutdownNow();
+    }
+
+    private static synchronized ExecutorService ensureExecutor() {
+        if (syncExecutor.isShutdown()) {
+            syncExecutor = newSyncExecutor();
+        }
+        return syncExecutor;
+    }
+
+    private static ExecutorService newSyncExecutor() {
+        return new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(256), runnable -> {
+                    Thread thread = new Thread(runnable, "EasyVip-WebStore-Sync-" + System.nanoTime());
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private static String escapeJson(String value) {

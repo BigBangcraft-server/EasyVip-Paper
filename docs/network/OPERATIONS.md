@@ -29,3 +29,5 @@ completion stay off the server thread. Key-code tab completion intentionally
 does not query SQL synchronously.
 Legacy action scripts that invoke `give_package` still use the synchronous
 compatibility API and should be migrated before latency-sensitive production use.
+WebStore player/challenge sync uses a bounded executor (256 queued tasks) and
+rejects excess work instead of expanding an unbounded common-pool backlog.

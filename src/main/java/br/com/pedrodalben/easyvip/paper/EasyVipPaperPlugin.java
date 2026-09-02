@@ -259,6 +259,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         getLogger().info("Disabling EasyVip...");
 
         WebStoreFulfillmentService.stop();
+        WebStoreSyncService.stop();
         ExpirationService.stop();
         PersistenceManager.shutdown();
 
