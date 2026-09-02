@@ -1116,6 +1116,14 @@ public final class SqlDatabaseManager {
                 conn.rollback();
                 return new KeyClaimResult(KeyClaimStatus.INVALID_KEY, null, null);
             }
+            // A concurrent request may have committed while this transaction
+            // waited for the key row. Locking read rechecks the durable winner.
+            existing = findRedemption(conn, idempotencyKey, true);
+            if (existing != null) {
+                KeyRecord existingKey = getKey(conn, existing.code());
+                conn.commit();
+                return new KeyClaimResult(KeyClaimStatus.ALREADY_CLAIMED, existing.redemptionId(), existingKey);
+            }
             if (key.isExpired()) {
                 conn.rollback();
                 return new KeyClaimResult(KeyClaimStatus.EXPIRED, null, key);
@@ -1182,12 +1190,19 @@ public final class SqlDatabaseManager {
             conn.commit();
             return new KeyClaimResult(KeyClaimStatus.CLAIMED, claimId, key);
         } catch (SQLException e) {
-            if (isDuplicateKeyError(e) && physicalInstanceId != null) {
+            if (isDuplicateKeyError(e)) {
                 try (Connection conn = getConnection()) {
-                    RedemptionRow physicalClaim = findRedemptionByPhysical(conn, code, physicalInstanceId, false);
-                    if (physicalClaim != null && ("CLAIMED".equals(physicalClaim.status())
-                            || "COMPLETE".equals(physicalClaim.status()))) {
-                        return new KeyClaimResult(KeyClaimStatus.ALREADY_USED, physicalClaim.redemptionId(), null);
+                    RedemptionRow idempotentClaim = findRedemption(conn, idempotencyKey, false);
+                    if (idempotentClaim != null) {
+                        return new KeyClaimResult(KeyClaimStatus.ALREADY_CLAIMED, idempotentClaim.redemptionId(),
+                                getKey(conn, idempotentClaim.code()));
+                    }
+                    if (physicalInstanceId != null) {
+                        RedemptionRow physicalClaim = findRedemptionByPhysical(conn, code, physicalInstanceId, false);
+                        if (physicalClaim != null && ("CLAIMED".equals(physicalClaim.status())
+                                || "COMPLETE".equals(physicalClaim.status()))) {
+                            return new KeyClaimResult(KeyClaimStatus.ALREADY_USED, physicalClaim.redemptionId(), null);
+                        }
                     }
                 } catch (SQLException ignored) {
                 }

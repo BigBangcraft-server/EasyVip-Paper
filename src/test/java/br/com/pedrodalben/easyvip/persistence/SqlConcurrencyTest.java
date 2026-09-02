@@ -104,6 +104,50 @@ class SqlConcurrencyTest {
     }
 
     @Test
+    void concurrentDuplicateIdempotencyHasOneDurableWinner() throws Exception {
+        KeyRecord key = new KeyRecord();
+        key.setCode("EVIP-IDEMPOTENCY-RACE-" + runId);
+        key.setType("custom");
+        key.setMaxUses(1);
+        key.setCreatedTime(System.currentTimeMillis());
+        SqlDatabaseManager.putKey(key);
+
+        List<SqlDatabaseManager.KeyClaimResult> claims = race(2, (start, index) -> {
+            start.await();
+            return SqlDatabaseManager.claimKey(key.getCode(), UUID.randomUUID(), null, true,
+                    "same-race-" + runId, System.currentTimeMillis(), 10_000L);
+        });
+
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count());
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED).count());
+    }
+
+    @Test
+    void duplicateIdempotencyAcrossKeysReturnsTheCommittedWinner() throws Exception {
+        KeyRecord first = new KeyRecord();
+        first.setCode("EVIP-IDEMPOTENCY-A-" + runId);
+        first.setType("custom");
+        first.setMaxUses(1);
+        first.setCreatedTime(System.currentTimeMillis());
+        SqlDatabaseManager.putKey(first);
+        KeyRecord second = new KeyRecord();
+        second.setCode("EVIP-IDEMPOTENCY-B-" + runId);
+        second.setType("custom");
+        second.setMaxUses(1);
+        second.setCreatedTime(System.currentTimeMillis());
+        SqlDatabaseManager.putKey(second);
+
+        List<SqlDatabaseManager.KeyClaimResult> claims = race(2, (start, index) -> {
+            start.await();
+            return SqlDatabaseManager.claimKey(index == 0 ? first.getCode() : second.getCode(), UUID.randomUUID(), null,
+                    true, "cross-key-race-" + runId, System.currentTimeMillis(), 10_000L);
+        });
+
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count());
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED).count());
+    }
+
+    @Test
     void packageClaimUniquenessAndVipCasAreDatabaseDecisions() throws Exception {
         UUID player = UUID.randomUUID();
         List<SqlDatabaseManager.PackageClaimResult> claims = race(2, (start, index) -> {
