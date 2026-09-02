@@ -118,8 +118,10 @@ class SqlConcurrencyTest {
                     "same-race-" + runId, System.currentTimeMillis(), 10_000L);
         });
 
-        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count());
-        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED).count());
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count(),
+                () -> "claims=" + claims);
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED).count(),
+                () -> "claims=" + claims);
     }
 
     @Test
@@ -143,8 +145,10 @@ class SqlConcurrencyTest {
                     true, "cross-key-race-" + runId, System.currentTimeMillis(), 10_000L);
         });
 
-        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count());
-        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED).count());
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.CLAIMED).count(),
+                () -> "claims=" + claims);
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED).count(),
+                () -> "claims=" + claims);
     }
 
     @Test
@@ -185,8 +189,10 @@ class SqlConcurrencyTest {
                     "cooldown-race-" + runId + "-" + index, now, 10_000L);
         });
 
-        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.CLAIMED).count());
-        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN).count());
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.CLAIMED).count(),
+                () -> "claims=" + claims);
+        assertEquals(1, claims.stream().filter(c -> c.status() == SqlDatabaseManager.PackageClaimStatus.COOLDOWN).count(),
+                () -> "claims=" + claims);
     }
 
     @Test

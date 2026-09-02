@@ -986,6 +986,11 @@ public final class SqlDatabaseManager {
         return "23000".equals(sqlState) || "23505".equals(sqlState);
     }
 
+    private static boolean isRetryableTransactionError(SQLException e) {
+        String sqlState = e.getSQLState();
+        return "40001".equals(sqlState) || "41000".equals(sqlState);
+    }
+
     private static void setKeyStatement(PreparedStatement ps, KeyRecord record) throws SQLException {
         ps.setString(1, record.getCode());
         ps.setString(2, record.getType());
@@ -1097,6 +1102,12 @@ public final class SqlDatabaseManager {
      */
     public static KeyClaimResult claimKey(String code, UUID playerUuid, String physicalInstanceId,
                                           boolean consumesUse, String idempotencyKey, long now, long leaseMillis) {
+        return claimKey(code, playerUuid, physicalInstanceId, consumesUse, idempotencyKey, now, leaseMillis, 0);
+    }
+
+    private static KeyClaimResult claimKey(String code, UUID playerUuid, String physicalInstanceId,
+                                           boolean consumesUse, String idempotencyKey, long now, long leaseMillis,
+                                           int retryAttempt) {
         if (code == null || playerUuid == null || idempotencyKey == null || idempotencyKey.isBlank()) {
             return new KeyClaimResult(KeyClaimStatus.ERROR, null, null);
         }
@@ -1190,6 +1201,10 @@ public final class SqlDatabaseManager {
             conn.commit();
             return new KeyClaimResult(KeyClaimStatus.CLAIMED, claimId, key);
         } catch (SQLException e) {
+            if (isRetryableTransactionError(e) && retryAttempt < 3) {
+                return claimKey(code, playerUuid, physicalInstanceId, consumesUse, idempotencyKey,
+                        now, leaseMillis, retryAttempt + 1);
+            }
             if (isDuplicateKeyError(e)) {
                 try (Connection conn = getConnection()) {
                     RedemptionRow idempotentClaim = findRedemption(conn, idempotencyKey, false);
@@ -1550,6 +1565,13 @@ public final class SqlDatabaseManager {
     public static PackageClaimResult claimPackage(UUID playerUuid, String packageId, boolean repeatable,
                                                   long cooldownMillis, String idempotencyKey,
                                                   long now, long leaseMillis) {
+        return claimPackage(playerUuid, packageId, repeatable, cooldownMillis, idempotencyKey,
+                now, leaseMillis, 0);
+    }
+
+    private static PackageClaimResult claimPackage(UUID playerUuid, String packageId, boolean repeatable,
+                                                   long cooldownMillis, String idempotencyKey,
+                                                   long now, long leaseMillis, int retryAttempt) {
         if (playerUuid == null || packageId == null || packageId.isBlank()
                 || idempotencyKey == null || idempotencyKey.isBlank()) {
             return new PackageClaimResult(PackageClaimStatus.ERROR, null);
@@ -1610,6 +1632,10 @@ public final class SqlDatabaseManager {
             conn.commit();
             return new PackageClaimResult(PackageClaimStatus.CLAIMED, claimId);
         } catch (SQLException e) {
+            if (isRetryableTransactionError(e) && retryAttempt < 3) {
+                return claimPackage(playerUuid, packageId, repeatable, cooldownMillis, idempotencyKey,
+                        now, leaseMillis, retryAttempt + 1);
+            }
             if (isDuplicateKeyError(e)) {
                 try (Connection conn = getConnection()) {
                     PackageClaimRow existing = findPackageClaim(conn, claimKey, false);
