@@ -10,3 +10,12 @@
 * Install the Paper JAR on backend nodes and the Velocity JAR only on the proxy.
 * Verify diagnostics and player join/capability behavior on a canary before
   horizontal rollout.
+
+## Loader smoke evidence
+
+On 2026-09-02, the built Paper artifact was loaded by Paper `26.2-121` under
+Temurin Java 25. Paper recognized `EasyVip (1.2.0)`, advertised API
+`26.2.build.121-stable`, and enabled the plugin successfully in 47 ms using
+the default JSON configuration. This is disposable loader evidence only; it
+does not replace a production canary with the real SQL, Redis, proxy, and
+trust-store configuration.

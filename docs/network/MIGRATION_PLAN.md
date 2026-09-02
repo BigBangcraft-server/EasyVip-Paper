@@ -58,8 +58,12 @@ Status: implementation in progress.
   and operations/deployment documentation.
 * Disposable MySQL 8.4, MariaDB 11.4, and Redis 7.4 restart labs passed on
   2026-09-02; CI also runs the database compatibility matrix.
+* A disposable Paper `26.2-121` loader smoke passed under Temurin Java 25 on
+  2026-09-02; the plugin was discovered and enabled against API
+  `26.2.build.121-stable`.
 * Remaining: production certificate/trust review, proxy/backend trust review,
-  performance measurements, and production loader smoke tests.
+  production failover exercises, performance measurements, and a production
+  canary loader smoke test with real SQL/Redis/proxy configuration.
 
 ## Exit criteria for the next goal
 
