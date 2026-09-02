@@ -325,8 +325,7 @@ public final class KeyService {
                         claim.record().getDuration(), claim.playerName(), false);
             });
         } else {
-            effect = VipService.runOnServerAsync(plugin, player,
-                    () -> executeKeyReward(player, claim.record(), context));
+            effect = executeKeyRewardAsync(plugin, player, claim.record(), context);
         }
 
         return effect.handle((success, error) -> error == null && Boolean.TRUE.equals(success))
@@ -530,6 +529,117 @@ public final class KeyService {
         return rkDef == null || rkDef.consumeOnUse;
     }
 
+    private record KeyActionPreparation(List<Map<String, Object>> actions,
+                                        Map<String, String> context,
+                                        String messageEn,
+                                        String messagePt,
+                                        String logDetails) {
+        boolean valid() {
+            return actions != null && !actions.isEmpty();
+        }
+    }
+
+    /** Validates a reward/custom key off-thread, then executes its actions asynchronously. */
+    private static CompletionStage<Boolean> executeKeyRewardAsync(org.bukkit.plugin.Plugin plugin,
+                                                                    Player player, KeyRecord record,
+                                                                    Map<String, String> context) {
+        CompletionStage<String> dimension = VipService.runOnServerAsync(plugin, player,
+                () -> getDimensionId(player));
+        return dimension.thenCompose(dimensionId -> PersistenceManager.executeAsync(() ->
+                        prepareKeyActionReward(record, player.getUniqueId(), dimensionId, context)))
+                .thenCompose(preparation -> {
+                    if (!preparation.valid()) {
+                        CompletionStage<Void> notify = preparation.messageEn() == null
+                                ? CompletableFuture.completedFuture(null)
+                                : VipService.runOnServerAsync(plugin, player, () -> {
+                                    sendNotConsumedMessage(player, preparation.messageEn(), preparation.messagePt(),
+                                            preparation.context());
+                                    return null;
+                                });
+                        CompletionStage<Void> audit = PersistenceManager.executeAsync(() -> {
+                            PersistenceManager.log(player.getName(), "redeem_key_failed", preparation.logDetails());
+                            return null;
+                        });
+                        return notify.thenCombine(audit, (ignored, ignoredAudit) -> false);
+                    }
+                    return ActionExecutor.executeAsync(plugin, player, preparation.actions(),
+                            preparation.context());
+                });
+    }
+
+    private static KeyActionPreparation prepareKeyActionReward(KeyRecord record, UUID uuid,
+                                                                String dimensionId,
+                                                                Map<String, String> baseContext) {
+        Map<String, String> context = new HashMap<>(baseContext == null ? Map.of() : baseContext);
+        String code = record.getCode();
+        if ("reward".equalsIgnoreCase(record.getType())) {
+            context.put("reward_key_id", record.getRewardKeyId());
+            EasyVipConfig.RewardKeyDefinition reward = EasyVipConfig.rewardKeys.list.get(record.getRewardKeyId());
+            if (reward == null) {
+                return invalidKeyAction(context,
+                        "&cReward not found or invalid. The key was not consumed.",
+                        "&cRecompensa não encontrada ou inválida. A chave não foi consumida.",
+                        "Reward definition missing for " + KeySecurity.describeKeyForLog(code));
+            }
+            if (!isDimensionAllowed(dimensionId, EasyVipConfig.common.allowedDimensions,
+                    EasyVipConfig.common.denyDimensions)) {
+                return invalidKeyAction(context, null, null,
+                        "Dimension blocked for " + KeySecurity.describeKeyForLog(code));
+            }
+            if (!reward.allowedDimensions.isEmpty()
+                    && !isDimensionAllowed(dimensionId, reward.allowedDimensions, Collections.emptyList())) {
+                return invalidKeyAction(context, null, null,
+                        "Reward dimension blocked for " + KeySecurity.describeKeyForLog(code));
+            }
+
+            List<Map<String, Object>> actions = record.getActions();
+            if (actions == null || actions.isEmpty()) {
+                actions = reward.actions;
+                context.put("key_display", reward.displayName);
+            }
+            if (actions == null || actions.isEmpty()) {
+                return invalidKeyAction(context,
+                        "&cReward not found or invalid. The key was not consumed.",
+                        "&cRecompensa não encontrada ou inválida. A chave não foi consumida.",
+                        "Reward actions missing for " + KeySecurity.describeKeyForLog(code));
+            }
+            Long lastUsed = record.getLastUsedAtBy().get(uuid);
+            long cooldownMs = reward.cooldownSeconds > 0 ? reward.cooldownSeconds * 1000L : 0L;
+            if (cooldownMs > 0 && lastUsed != null
+                    && System.currentTimeMillis() - lastUsed < cooldownMs) {
+                return invalidKeyAction(context, null, null,
+                        "Reward cooldown active for " + KeySecurity.describeKeyForLog(code));
+            }
+            return new KeyActionPreparation(new ArrayList<>(actions), context, null, null, null);
+        }
+
+        if ("custom".equalsIgnoreCase(record.getType())) {
+            if (!isDimensionAllowed(dimensionId, EasyVipConfig.common.allowedDimensions,
+                    EasyVipConfig.common.denyDimensions)) {
+                return invalidKeyAction(context, null, null,
+                        "Dimension blocked for " + KeySecurity.describeKeyForLog(code));
+            }
+            List<Map<String, Object>> actions = record.getActions();
+            if (actions == null || actions.isEmpty()) {
+                return invalidKeyAction(context,
+                        "&cCustom actions not found or invalid. The key was not consumed.",
+                        "&cAções customizadas não encontradas ou inválidas. A chave não foi consumida.",
+                        "Custom actions missing for " + KeySecurity.describeKeyForLog(code));
+            }
+            return new KeyActionPreparation(new ArrayList<>(actions), context, null, null, null);
+        }
+
+        return invalidKeyAction(context, null, null,
+                "Unsupported key type for " + KeySecurity.describeKeyForLog(code));
+    }
+
+    private static KeyActionPreparation invalidKeyAction(Map<String, String> context,
+                                                          String messageEn, String messagePt,
+                                                          String logDetails) {
+        return new KeyActionPreparation(List.of(), context, messageEn, messagePt,
+                logDetails == null ? "Key action validation failed" : logDetails);
+    }
+
     private static boolean executeKeyReward(Player player, KeyRecord record, Map<String, String> ctx) {
         UUID uuid = player.getUniqueId();
         String dimensionId = getDimensionId(player);
@@ -551,81 +661,28 @@ public final class KeyService {
             return VipService.addVip(uuid, playerName, record.getTierId(), record.getDuration(), playerName, false);
         }
 
-        if (record.getType().equalsIgnoreCase("reward")) {
-            ctx.put("reward_key_id", record.getRewardKeyId());
-            EasyVipConfig.RewardKeyDefinition rkDef = EasyVipConfig.rewardKeys.list.get(record.getRewardKeyId());
-            if (rkDef == null) {
-                sendNotConsumedMessage(player, "&cReward not found or invalid. The key was not consumed.",
-                        "&cRecompensa não encontrada ou inválida. A chave não foi consumida.", ctx);
-                PersistenceManager.log(playerName, "redeem_key_failed", "Reward definition missing for "
-                        + KeySecurity.describeKeyForLog(code));
+        if (record.getType().equalsIgnoreCase("reward") || record.getType().equalsIgnoreCase("custom")) {
+            KeyActionPreparation preparation = prepareKeyActionReward(record, uuid, dimensionId, ctx);
+            if (!preparation.valid()) {
+                if (preparation.messageEn() != null) {
+                    sendNotConsumedMessage(player, preparation.messageEn(), preparation.messagePt(),
+                            preparation.context());
+                }
+                PersistenceManager.log(playerName, "redeem_key_failed", preparation.logDetails());
                 return false;
             }
-            if (!isDimensionAllowed(dimensionId, EasyVipConfig.common.allowedDimensions, EasyVipConfig.common.denyDimensions)) {
-                PersistenceManager.log(playerName, "redeem_key_failed", "Dimension blocked for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-            if (!rkDef.allowedDimensions.isEmpty() && !isDimensionAllowed(dimensionId, rkDef.allowedDimensions, Collections.emptyList())) {
-                PersistenceManager.log(playerName, "redeem_key_failed", "Reward dimension blocked for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-
-            List<Map<String, Object>> actions = record.getActions();
-            if (actions == null || actions.isEmpty()) {
-                actions = rkDef.actions;
-                ctx.put("key_display", rkDef.displayName);
-            }
-            if (actions == null || actions.isEmpty()) {
-                sendNotConsumedMessage(player, "&cReward not found or invalid. The key was not consumed.",
-                        "&cRecompensa não encontrada ou inválida. A chave não foi consumida.", ctx);
-                PersistenceManager.log(playerName, "redeem_key_failed", "Reward actions missing for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-
-            Long lastUsed = record.getLastUsedAtBy().get(uuid);
-            long cooldownMs = rkDef.cooldownSeconds > 0 ? rkDef.cooldownSeconds * 1000L : 0L;
-            if (cooldownMs > 0 && lastUsed != null && System.currentTimeMillis() - lastUsed < cooldownMs) {
-                PersistenceManager.log(playerName, "redeem_key_failed", "Reward cooldown active for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-
-            boolean actionsOk = ActionExecutor.execute(player, actions, ctx);
-            if (!actionsOk) {
-                sendNotConsumedMessage(player, "&cReward not found or invalid. The key was not consumed.",
-                        "&cRecompensa não encontrada ou inválida. A chave não foi consumida.", ctx);
-                PersistenceManager.log(playerName, "redeem_key_failed", "Reward actions failed for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-            return true;
-        }
-
-        if (record.getType().equalsIgnoreCase("custom")) {
-            if (!isDimensionAllowed(dimensionId, EasyVipConfig.common.allowedDimensions, EasyVipConfig.common.denyDimensions)) {
-                PersistenceManager.log(playerName, "redeem_key_failed", "Dimension blocked for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-
-            List<Map<String, Object>> actions = record.getActions();
-            if (actions == null || actions.isEmpty()) {
-                sendNotConsumedMessage(player, "&cCustom actions not found or invalid. The key was not consumed.",
-                        "&cAções customizadas não encontradas ou inválidas. A chave não foi consumida.", ctx);
-                PersistenceManager.log(playerName, "redeem_key_failed", "Custom actions missing for "
-                        + KeySecurity.describeKeyForLog(code));
-                return false;
-            }
-
-            boolean actionsOk = ActionExecutor.execute(player, actions, ctx);
-            if (!actionsOk) {
-                sendNotConsumedMessage(player, "&cError executing custom actions. The key was not consumed.",
-                        "&cErro ao executar ações customizadas. A chave não foi consumida.", ctx);
-                PersistenceManager.log(playerName, "redeem_key_failed", "Custom actions failed for "
-                        + KeySecurity.describeKeyForLog(code));
+            if (!ActionExecutor.execute(player, preparation.actions(), preparation.context())) {
+                String messageEn = record.getType().equalsIgnoreCase("custom")
+                        ? "&cError executing custom actions. The key was not consumed."
+                        : "&cReward not found or invalid. The key was not consumed.";
+                String messagePt = record.getType().equalsIgnoreCase("custom")
+                        ? "&cErro ao executar ações customizadas. A chave não foi consumida."
+                        : "&cRecompensa não encontrada ou inválida. A chave não foi consumida.";
+                sendNotConsumedMessage(player, messageEn, messagePt, preparation.context());
+                PersistenceManager.log(playerName, "redeem_key_failed",
+                        record.getType().equalsIgnoreCase("custom") ? "Custom actions failed for "
+                                + KeySecurity.describeKeyForLog(code) : "Reward actions failed for "
+                                + KeySecurity.describeKeyForLog(code));
                 return false;
             }
             return true;

@@ -27,7 +27,9 @@ executors. Bukkit effects are scheduled back to the owning player/global
 scheduler; SQL/file claims, administrative key operations and variant operations, and
 completion stay off the server thread. Key-code tab completion intentionally
 does not query SQL synchronously.
-Legacy action scripts that invoke `give_package` still use the synchronous
-compatibility API and should be migrated before latency-sensitive production use.
+Paper key reward/custom redemption now processes `give_package` through the
+asynchronous claim chain. Legacy direct action/VIP compatibility calls that
+invoke `give_package` remain synchronous and should be migrated before
+latency-sensitive production use.
 WebStore player/challenge sync uses a bounded executor (256 queued tasks) and
 rejects excess work instead of expanding an unbounded common-pool backlog.

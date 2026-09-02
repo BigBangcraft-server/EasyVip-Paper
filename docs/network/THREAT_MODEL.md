@@ -45,8 +45,9 @@ controls belong to GOAL 06 remain explicitly open.
   reorder, or disappear during an outage.
 * JSON mode remains a compatibility fallback with JVM-local blob locking; SQL
   mode is required for distributed authority. Paper key/package claims now use
-  a bounded executor and scheduler-marshalled last-mile actions. Legacy
-  scripted `give_package` actions still use the synchronous compatibility API.
+  a bounded executor and scheduler-marshalled last-mile actions. Key
+  reward/custom actions also keep nested `give_package` claims asynchronous;
+  legacy direct action/VIP compatibility calls still use the synchronous API.
 
 ## Required mitigations before network use
 
