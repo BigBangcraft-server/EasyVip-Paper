@@ -31,7 +31,9 @@ and asserts one winner for key usage, package claims, and expiration, plus a
 stale-snapshot CAS failure. It also checks duplicate idempotency, transaction
 rollback, legacy migration verification, and pool restart/reconnect. The suite
 passes on H2 and was executed successfully against MySQL 8.4; MariaDB remains
-an additional compatibility gate.
+an additional compatibility gate. Disposable restart labs for MySQL 8.4 and
+MariaDB 11.4 also passed the suite before and after restart; production
+failover remains a deployment gate.
 
 To point the same test at a real database, set `EASYVIP_TEST_JDBC_URL`,
 `EASYVIP_TEST_JDBC_USER`, and `EASYVIP_TEST_JDBC_PASSWORD` before running the

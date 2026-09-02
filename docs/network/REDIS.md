@@ -22,7 +22,9 @@ ready. If startup, ping, publish, or subscribe fails, SQL-backed capability
 checks continue and the local TTL cache remains safe.
 
 CI executes the Pub/Sub and node-heartbeat integration tests against Redis 7.4.
-Restart/recovery and production ACL/TLS drills remain deployment gates.
+On 2026-09-02, a disposable Redis 7.4 container was restarted and the
+integration suite passed before and after restart. Production ACL/TLS and
+failover drills remain deployment gates.
 
 ## Node heartbeat
 
