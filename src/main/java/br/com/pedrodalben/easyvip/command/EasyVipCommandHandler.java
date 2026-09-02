@@ -515,16 +515,12 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     name = player.getName();
                 }
 
-                PackageService.cleanupExpiredPendingVariants(uuid);
-                List<PendingVariantSelection> pending = PersistenceManager.getPendingVariants(uuid);
-                if (pending.isEmpty()) {
-                    TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No pending variants for ", "Sem variantes pendentes para ") + name);
-                    return true;
-                }
-
-                TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("Pending variants for ", "Variantes pendentes de ") + name + ": " + pending.size());
-                for (PendingVariantSelection sel : pending) {
-                    TextUtil.sendMessage(sender, "§7- §f" + sel.getPackageId() + " §8| §7" + String.join(", ", sel.getVariants()));
+                if (plugin != null) {
+                    PackageService.pendingVariantsAsync(uuid).whenComplete((pending, error) -> runOnServer(() ->
+                            sendPendingVariants(sender, name, error == null ? pending : List.of(), error)));
+                } else {
+                    PackageService.cleanupExpiredPendingVariants(uuid);
+                    sendPendingVariants(sender, name, PersistenceManager.getPendingVariants(uuid), null);
                 }
                 return true;
             }
@@ -542,26 +538,69 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                 Player p = Bukkit.getPlayer(targetName);
                 UUID uuid = p != null ? p.getUniqueId() : Bukkit.getOfflinePlayer(targetName).getUniqueId();
 
-                List<PendingVariantSelection> pending = PersistenceManager.getPendingVariants(uuid);
-                if (pending.isEmpty()) {
-                    TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No pending variant found.", "Nenhuma variante pendente encontrada."));
-                    return true;
-                }
-
                 String packageId = args.size() > 2 ? args.get(2) : null;
-                if (packageId == null) {
-                    for (PendingVariantSelection sel : new ArrayList<>(pending)) {
-                        PersistenceManager.removePendingVariant(uuid, sel.getPackageId());
-                    }
+                if (plugin != null) {
+                    PackageService.clearPendingVariantsAsync(uuid, packageId).whenComplete((removed, error) ->
+                            runOnServer(() -> sendPendingVariantsCleared(sender,
+                                    error == null ? removed : 0, error)));
                 } else {
-                    PersistenceManager.removePendingVariant(uuid, packageId);
+                    List<PendingVariantSelection> pending = PersistenceManager.getPendingVariants(uuid);
+                    if (pending.isEmpty()) {
+                        TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No pending variant found.", "Nenhuma variante pendente encontrada."));
+                        return true;
+                    }
+                    int removed = 0;
+                    for (PendingVariantSelection sel : new ArrayList<>(pending)) {
+                        if (packageId == null || packageId.equals(sel.getPackageId())) {
+                            PersistenceManager.removePendingVariant(uuid, sel.getPackageId());
+                            removed++;
+                        }
+                    }
+                    sendPendingVariantsCleared(sender, removed, null);
                 }
-
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Variant pending entries removed successfully.", "Pendências de variante removidas com sucesso."));
                 return true;
             }
         }
         return true;
+    }
+
+    private void sendPendingVariants(CommandSender sender, String name,
+                                     List<PendingVariantSelection> pending, Throwable error) {
+        if (error != null) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "Unable to load pending variants.", "Não foi possível carregar as variantes pendentes."));
+            return;
+        }
+        if (pending.isEmpty()) {
+            TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No pending variants for ", "Sem variantes pendentes para ") + name);
+            return;
+        }
+        TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("Pending variants for ", "Variantes pendentes de ") + name + ": " + pending.size());
+        for (PendingVariantSelection sel : pending) {
+            TextUtil.sendMessage(sender, "§7- §f" + sel.getPackageId() + " §8| §7" + String.join(", ", sel.getVariants()));
+        }
+    }
+
+    private void sendPendingVariantsCleared(CommandSender sender, int removed, Throwable error) {
+        if (error != null) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized(
+                    "Unable to clear pending variants.", "Não foi possível limpar as variantes pendentes."));
+            return;
+        }
+        if (removed == 0) {
+            TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §7" + EasyVipConfig.localized("No pending variant found.", "Nenhuma variante pendente encontrada."));
+            return;
+        }
+        TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Variant pending entries removed successfully.", "Pendências de variante removidas com sucesso."));
+    }
+
+    private KeyRecord findKey(String rawCode) {
+        String code = rawCode.trim();
+        KeyRecord record = PersistenceManager.getKey(code);
+        if (record == null && !EasyVipConfig.common.caseSensitiveKeys) {
+            record = PersistenceManager.getKey(code.toUpperCase(Locale.ROOT));
+        }
+        return record;
     }
 
     private boolean handleCreateVip(CommandSender sender, List<String> args) {
@@ -760,6 +799,9 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
         }
 
         String sub = args.get(0).toLowerCase(Locale.ROOT);
+        if (plugin != null) {
+            return handleKeyAsync(sender, args, sub);
+        }
         switch (sub) {
             case "list": {
                 List<KeyRecord> keys = PersistenceManager.getAllKeys();
@@ -829,6 +871,92 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             }
         }
         return true;
+    }
+
+    private boolean handleKeyAsync(CommandSender sender, List<String> args, String sub) {
+        switch (sub) {
+            case "list":
+                PersistenceManager.executeAsync(PersistenceManager::getAllKeys).whenComplete((keys, error) ->
+                        runOnServer(() -> {
+                            if (error != null) {
+                                TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Unable to load keys.", "Não foi possível carregar as chaves."));
+                                return;
+                            }
+                            TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §e" + EasyVipConfig.localized("Registered keys: ", "Keys cadastradas: ") + "§f" + keys.size());
+                            for (KeyRecord key : keys) {
+                                TextUtil.sendMessage(sender, "§7- §f" + KeySecurity.maskKey(key.getCode()) + " §8| §e" + key.getType() + " §8| §7" + EasyVipConfig.localized("uses", "usos") + " " + key.getUsedCount() + "/" + key.getMaxUses());
+                            }
+                        }));
+                return true;
+            case "info":
+                if (args.size() < 2) {
+                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip key info <code> [reveal]", "Uso: /easyvip key info <codigo> [reveal]"));
+                    return true;
+                }
+                String infoCode = args.get(1).trim();
+                boolean reveal = args.size() > 2 && args.get(2).equalsIgnoreCase("reveal");
+                PersistenceManager.executeAsync(() -> {
+                    KeyRecord key = findKey(infoCode);
+                    if (reveal && key != null) {
+                        PersistenceManager.log(sender.getName(), "key_info_reveal",
+                                "Key info requested for " + KeySecurity.describeKeyForLog(key.getCode()));
+                    }
+                    return key;
+                }).whenComplete((key, error) ->
+                        runOnServer(() -> sendKeyInfo(sender, key, reveal, error)));
+                return true;
+            case "delete":
+                if (args.size() < 2) {
+                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip key delete <code>", "Uso: /easyvip key delete <codigo>"));
+                    return true;
+                }
+                String deleteCode = args.get(1).trim();
+                PersistenceManager.executeAsync(() -> {
+                    KeyRecord key = findKey(deleteCode);
+                    if (key != null) PersistenceManager.removeKey(key.getCode());
+                    return key;
+                }).whenComplete((key, error) -> runOnServer(() -> {
+                    if (error != null || key == null) {
+                        TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Key not found.", "Chave não encontrada."));
+                    } else {
+                        TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Key removed.", "Chave removida."));
+                    }
+                }));
+                return true;
+            case "cleanup":
+                PersistenceManager.executeAsync(() -> {
+                    int removed = 0;
+                    for (KeyRecord key : PersistenceManager.getAllKeys()) {
+                        if (key.getUsedCount() <= 0) {
+                            PersistenceManager.removeKey(key.getCode());
+                            removed++;
+                        }
+                    }
+                    return removed;
+                }).whenComplete((removed, error) -> runOnServer(() -> {
+                    if (error != null) {
+                        TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Key cleanup failed.", "Falha na limpeza das chaves."));
+                    } else {
+                        TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Cleanup complete. Removed ", "Limpeza concluída. Removidas ") + "§e" + removed + " §a" + EasyVipConfig.localized("unused key(s).", "chave(s) não utilizadas."));
+                    }
+                }));
+                return true;
+            default:
+                TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Usage: /easyvip key <list|info|delete|cleanup>", "Uso: /easyvip key <list|info|delete|cleanup>"));
+                return true;
+        }
+    }
+
+    private void sendKeyInfo(CommandSender sender, KeyRecord key, boolean reveal, Throwable error) {
+        if (error != null || key == null) {
+            TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Key not found.", "Chave não encontrada."));
+            return;
+        }
+        String displayCode = reveal ? key.getCode() : KeySecurity.maskKey(key.getCode());
+        TextUtil.sendMessage(sender, "§7[§eEasyVip§7] §a" + displayCode
+                + " §8| §7" + KeySecurity.describeKeyForLog(key.getCode())
+                + " §8| §f" + key.getType()
+                + " §8| §f" + EasyVipConfig.localized("used", "usado") + " " + key.getUsedCount() + "/" + key.getMaxUses());
     }
 
     private boolean handlePackage(CommandSender sender, List<String> args) {
@@ -1001,17 +1129,25 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     return true;
                 }
                 String code = args.get(2);
-                KeyRecord record = PersistenceManager.getKey(code.trim().toUpperCase(Locale.ROOT));
-                if (record == null && !EasyVipConfig.common.caseSensitiveKeys) {
-                    record = PersistenceManager.getKey(code.trim());
+                if (plugin != null) {
+                    PersistenceManager.executeAsync(() -> findKey(code)).whenComplete((record, error) ->
+                            runOnServer(() -> {
+                                if (error != null || record == null) {
+                                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Key not found.", "Chave não encontrada."));
+                                    return;
+                                }
+                                p.getInventory().addItem(KeyService.createPhysicalKeyItem(record.getCode()));
+                                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Key item delivered successfully.", "Item de chave entregue com segurança."));
+                            }));
+                } else {
+                    KeyRecord record = findKey(code);
+                    if (record == null) {
+                        TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Key not found.", "Chave não encontrada."));
+                        return true;
+                    }
+                    p.getInventory().addItem(KeyService.createPhysicalKeyItem(record.getCode()));
+                    TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Key item delivered successfully.", "Item de chave entregue com segurança."));
                 }
-                if (record == null) {
-                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Key not found.", "Chave não encontrada."));
-                    return true;
-                }
-
-                p.getInventory().addItem(KeyService.createPhysicalKeyItem(record.getCode()));
-                TextUtil.sendMessage(sender, "§a" + EasyVipConfig.localized("Key item delivered successfully.", "Item de chave entregue com segurança."));
                 return true;
             }
 
@@ -1613,13 +1749,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
 
         if (sub.equals("key")) {
             if (args.length == 2) return filterMatches(List.of("list", "info", "delete", "cleanup"), args[1]);
-            if (args.length == 3 && (args[1].equalsIgnoreCase("info") || args[1].equalsIgnoreCase("delete"))) {
-                List<String> keyCodes = new ArrayList<>();
-                for (KeyRecord kr : PersistenceManager.getAllKeys()) {
-                    keyCodes.add(kr.getCode());
-                }
-                return filterMatches(keyCodes, args[2]);
-            }
+            // Key-code suggestions must not query SQL from Bukkit's synchronous tab-complete thread.
             if (args.length == 4 && args[1].equalsIgnoreCase("info")) {
                 return filterMatches(List.of("reveal"), args[3]);
             }

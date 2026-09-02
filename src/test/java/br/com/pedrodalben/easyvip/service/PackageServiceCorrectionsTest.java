@@ -74,4 +74,18 @@ class PackageServiceCorrectionsTest {
         assertFalse(PersistenceManager.getPendingVariants(uuid).isEmpty());
     }
 
+    @Test
+    void asyncPendingVariantOperationsUsePersistenceExecutor() {
+        UUID uuid = UUID.randomUUID();
+        PendingVariantSelection selection = new PendingVariantSelection(uuid, "starter", List.of("a", "b"));
+        PersistenceManager.addPendingVariant(uuid, selection);
+
+        List<PendingVariantSelection> loaded = PackageService.pendingVariantsAsync(uuid).toCompletableFuture().join();
+        assertEquals(1, loaded.size());
+        assertEquals("starter", loaded.get(0).getPackageId());
+
+        assertEquals(1, PackageService.clearPendingVariantsAsync(uuid, null).toCompletableFuture().join());
+        assertTrue(PersistenceManager.getPendingVariants(uuid).isEmpty());
+    }
+
 }

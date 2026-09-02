@@ -76,6 +76,33 @@ public final class PackageService {
         });
     }
 
+    /** Loads pending variants without blocking a command/event thread. */
+    public static CompletionStage<List<PendingVariantSelection>> pendingVariantsAsync(UUID uuid) {
+        return PersistenceManager.executeAsync(() -> {
+            cleanupExpiredPendingVariants(uuid);
+            return List.copyOf(PersistenceManager.getPendingVariants(uuid));
+        });
+    }
+
+    /** Removes pending variants and releases any SQL claim off the server thread. */
+    public static CompletionStage<Integer> clearPendingVariantsAsync(UUID uuid, String packageId) {
+        return PersistenceManager.executeAsync(() -> {
+            List<PendingVariantSelection> pending = new ArrayList<>(PersistenceManager.getPendingVariants(uuid));
+            int removed = 0;
+            for (PendingVariantSelection selection : pending) {
+                if (packageId == null || packageId.equals(selection.getPackageId())) {
+                    if (PersistenceManager.isSqlMode() && selection.getClaimId() != null) {
+                        SqlDatabaseManager.releasePackageClaim(selection.getClaimId(), uuid,
+                                "admin_cleared", System.currentTimeMillis());
+                    }
+                    PersistenceManager.removePendingVariant(uuid, selection.getPackageId());
+                    removed++;
+                }
+            }
+            return removed;
+        });
+    }
+
     static void notifyPendingVariantsOnLogin(UUID uuid, String playerName, Consumer<String> messageSink) {
         cleanupExpiredPendingVariants(uuid);
         if (!EasyVipConfig.common.notifyPendingVariantOnLogin) {
