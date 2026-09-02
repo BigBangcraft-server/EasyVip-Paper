@@ -233,13 +233,13 @@ public final class PersistenceManager {
                 String content = Files.readString(file);
                 return GSON.fromJson(content, type);
             } catch (Exception e) {
-                System.err.println("[EasyVip] Error loading " + file.getFileName() + ", trying backup: " + e.getMessage());
+                System.err.println("[EasyVip] Error loading " + file.getFileName() + ", trying backup: " + e.getClass().getSimpleName());
                 if (Files.exists(backup)) {
                     try {
                         String content = Files.readString(backup);
                         return GSON.fromJson(content, type);
                     } catch (Exception ex) {
-                        System.err.println("[EasyVip] Backup also corrupt for " + file.getFileName() + ": " + ex.getMessage());
+                        System.err.println("[EasyVip] Backup also corrupt for " + file.getFileName() + ": " + ex.getClass().getSimpleName());
                     }
                 }
             }
@@ -248,7 +248,7 @@ public final class PersistenceManager {
                 String content = Files.readString(backup);
                 return GSON.fromJson(content, type);
             } catch (Exception e) {
-                System.err.println("[EasyVip] Error loading backup for " + file.getFileName() + ": " + e.getMessage());
+                System.err.println("[EasyVip] Error loading backup for " + file.getFileName() + ": " + e.getClass().getSimpleName());
             }
         }
         return null;
@@ -364,7 +364,7 @@ public final class PersistenceManager {
                 Files.move(tempFile, file, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException e) {
-            System.err.println("[EasyVip] Failed to save file atomically: " + file.getFileName() + ": " + e.getMessage());
+            System.err.println("[EasyVip] Failed to save file atomically: " + file.getFileName() + ": " + e.getClass().getSimpleName());
         }
     }
 

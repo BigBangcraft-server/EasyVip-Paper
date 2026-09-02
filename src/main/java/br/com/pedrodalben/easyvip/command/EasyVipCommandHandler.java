@@ -547,7 +547,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             EasyVipConfig.saveTiers();
         } catch (IOException e) {
             Map<String, String> context = new HashMap<>();
-            context.put("error", e.getMessage() != null ? e.getMessage() : "unknown");
+            context.put("error", e.getClass().getSimpleName());
             TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.reloadError, context));
             return true;
         }
@@ -615,7 +615,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             EasyVipConfig.saveActivationItems(tier.id);
         } catch (IOException e) {
             Map<String, String> context = new HashMap<>();
-            context.put("error", e.getMessage() != null ? e.getMessage() : "unknown");
+            context.put("error", e.getClass().getSimpleName());
             TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.reloadError, context));
             return true;
         }
@@ -676,7 +676,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             return true;
         } catch (Exception e) {
             Map<String, String> context = new HashMap<>();
-            context.put("error", e.getMessage() != null ? e.getMessage() : "unknown");
+            context.put("error", e.getClass().getSimpleName());
             TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.prefix + EasyVipConfig.messages.reloadError, context));
             return true;
         }
@@ -1323,7 +1323,7 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                         return true;
                     }
                 } catch (Exception e) {
-                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Invalid JSON format for actions: ", "Formato de JSON inválido para as ações: ") + e.getMessage());
+                    TextUtil.sendMessage(sender, "§c" + EasyVipConfig.localized("Invalid JSON format for actions: ", "Formato de JSON inválido para as ações: ") + e.getClass().getSimpleName());
                     return true;
                 }
 

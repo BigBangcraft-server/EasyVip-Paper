@@ -384,7 +384,7 @@ public final class ActionExecutor {
             return false;
         }
         if (!isCommandAllowed(normalized)) {
-            System.err.println("[EasyVip] Command execution blocked by security allowlist: " + normalized);
+            System.err.println("[EasyVip] Command execution blocked by security allowlist: " + commandName(normalized));
             return false;
         }
         try {
@@ -401,11 +401,11 @@ public final class ActionExecutor {
     private static boolean executePlayerCommand(Player player, String cmd) {
         String normalized = sanitizeCommand(cmd);
         if (normalized == null) {
-            System.err.println("[EasyVip] Player command blocked by security normalization: " + cmd);
+            System.err.println("[EasyVip] Player command blocked by security normalization");
             return false;
         }
         if (!isCommandAllowed(normalized)) {
-            System.err.println("[EasyVip] Player command blocked by security allowlist: " + normalized);
+            System.err.println("[EasyVip] Player command blocked by security allowlist: " + commandName(normalized));
             return false;
         }
         return player.performCommand(normalized);
