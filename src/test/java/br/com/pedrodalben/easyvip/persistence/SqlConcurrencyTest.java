@@ -8,7 +8,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.List;
@@ -23,12 +22,15 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SqlConcurrencyTest {
 
+    private String dbUrl;
+
     @BeforeEach
     void setUp() {
         EasyVipConfig.integrations.sqlPoolSize = 4;
         EasyVipConfig.integrations.sqlMinimumIdle = 1;
         EasyVipConfig.integrations.sqlConnectionTimeoutSeconds = 5;
-        SqlDatabaseManager.initialize("jdbc:h2:mem:easyvip_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "", "");
+        dbUrl = "jdbc:h2:mem:easyvip_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlDatabaseManager.initialize(dbUrl, "", "");
     }
 
     @AfterEach
@@ -110,6 +112,63 @@ class SqlConcurrencyTest {
 
         assertThrows(java.util.ConcurrentModificationException.class,
                 () -> SqlDatabaseManager.updatePlayerVips(player, stale));
+    }
+
+    @Test
+    void duplicateIdempotencyRollbackAndRestartAreObservable() {
+        UUID player = UUID.randomUUID();
+        KeyRecord key = new KeyRecord();
+        key.setCode("EVIP-IDEMPOTENT");
+        key.setType("custom");
+        key.setMaxUses(1);
+        key.setCreatedTime(System.currentTimeMillis());
+        SqlDatabaseManager.putKey(key);
+
+        SqlDatabaseManager.KeyClaimResult first = SqlDatabaseManager.claimKey(
+                key.getCode(), player, null, true, "same-request", System.currentTimeMillis(), 10_000L);
+        SqlDatabaseManager.KeyClaimResult duplicate = SqlDatabaseManager.claimKey(
+                key.getCode(), player, null, true, "same-request", System.currentTimeMillis(), 10_000L);
+        assertEquals(SqlDatabaseManager.KeyClaimStatus.CLAIMED, first.status());
+        assertEquals(SqlDatabaseManager.KeyClaimStatus.ALREADY_CLAIMED, duplicate.status());
+        assertTrue(SqlDatabaseManager.releaseKeyClaim(first.claimId(), "test_rollback"));
+
+        PlayerVipRegistry invalid = new PlayerVipRegistry(player);
+        invalid.setPlayerName("Rollback");
+        invalid.getVips().put("invalid", new PlayerVipRecord(null, 1L, -1L, true, false));
+        assertThrows(RuntimeException.class, () -> SqlDatabaseManager.updatePlayerVips(player, invalid));
+        assertNull(SqlDatabaseManager.getPlayerVips(player));
+
+        SqlDatabaseManager.shutdown();
+        SqlDatabaseManager.initialize(dbUrl, "", "");
+        assertNotNull(SqlDatabaseManager.getKey(key.getCode()));
+        assertTrue(SqlDatabaseManager.verifyLegacyVipMigration().complete());
+    }
+
+    @Test
+    void legacyVipRowIsMaterializedAndVerifiedAfterRestart() {
+        UUID player = UUID.randomUUID();
+        SqlDatabaseManager.withConnection(conn -> {
+            try (var ps = conn.prepareStatement("""
+                    INSERT INTO easyvip_vips (player_uuid, player_name, last_observed_active_vip, vips_data)
+                    VALUES (?, ?, ?, ?)
+                    """)) {
+                ps.setString(1, player.toString());
+                ps.setString(2, "Legacy");
+                ps.setString(3, "vip");
+                ps.setString(4, "{\"vip\":{\"tierId\":\"vip\",\"startTime\":1,\"expiryTime\":-1,\"active\":true,\"pendingActivateActions\":false}}");
+                ps.executeUpdate();
+            }
+            return null;
+        });
+
+        SqlDatabaseManager.shutdown();
+        SqlDatabaseManager.initialize(dbUrl, "", "");
+        SqlDatabaseManager.MigrationVerification verification = SqlDatabaseManager.verifyLegacyVipMigration();
+        assertTrue(verification.complete());
+        assertEquals(1, verification.legacyPlayers());
+        assertEquals(1, verification.migratedPlayers());
+        assertEquals(1, verification.legacyGrants());
+        assertTrue(SqlDatabaseManager.getPlayerVips(player).getVips().containsKey("vip"));
     }
 
     @Test

@@ -28,5 +28,7 @@ alternate source of truth.
 
 `SqlConcurrencyTest` runs two-thread races over separate pooled connections
 and asserts one winner for key usage, package claims, and expiration, plus a
-stale-snapshot CAS failure. H2 is a fast supplemental lab; release acceptance
-still requires the same suite against the supported MySQL/MariaDB versions.
+stale-snapshot CAS failure. It also checks duplicate idempotency, transaction
+rollback, legacy migration verification, and pool restart/reconnect. H2 is a
+fast supplemental lab; release acceptance still requires the same suite
+against the supported MySQL/MariaDB versions.

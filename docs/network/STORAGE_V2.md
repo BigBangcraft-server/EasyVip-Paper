@@ -12,7 +12,8 @@ a pooled JDBC connection; no operation opens a `DriverManager` connection.
 
 The schema migration is additive. Version `1` (`storage-v2-foundation`) is
 recorded in `easyvip_schema_migrations`; legacy tables remain for rollback and
-reconciliation until a later cleanup goal.
+reconciliation until a later cleanup goal. Startup calls
+`verifyLegacyVipMigration()` and reports count mismatches without deleting data.
 
 ## Normalized authority
 

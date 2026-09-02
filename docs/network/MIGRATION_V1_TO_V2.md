@@ -28,8 +28,10 @@ or entitlement created after migration.
 
 ## Verification
 
-After startup, verify `easyvip_schema_migrations.version = 1`, compare player
-and grant counts with `easyvip_vips`, and inspect the audit log for failed
-actions. The concurrency suite covers idempotent claims, key-use races, CAS
-stale snapshots, and single-winner expiration transitions against H2; MySQL or
-MariaDB remains the release-environment gate.
+After startup, `SqlDatabaseManager.verifyLegacyVipMigration()` verifies the
+materialized player/grant counts; operators can also check
+`easyvip_schema_migrations.version = 1`, compare counts with `easyvip_vips`,
+and inspect the audit log for failed actions. The concurrency suite covers
+idempotency, rollback, restart/reconnect, key-use races, CAS stale snapshots,
+and single-winner expiration transitions against H2; MySQL or MariaDB remains
+the release-environment gate.

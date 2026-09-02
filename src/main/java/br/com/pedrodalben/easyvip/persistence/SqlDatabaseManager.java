@@ -49,6 +49,10 @@ public final class SqlDatabaseManager {
         try {
             createTables();
             migrateLegacyVipData();
+            MigrationVerification verification = verifyLegacyVipMigration();
+            if (!verification.complete()) {
+                System.err.println("[EasyVip-SQL] Legacy migration verification mismatch: " + verification);
+            }
             initialized = true;
         } catch (RuntimeException e) {
             shutdown();
@@ -387,6 +391,44 @@ public final class SqlDatabaseManager {
         }
     }
 
+    public record MigrationVerification(long legacyPlayers, long migratedPlayers,
+                                        long legacyGrants, long migratedGrants, boolean complete) {
+    }
+
+    /** Compares legacy rows with materialized V2 rows without mutating either source. */
+    public static MigrationVerification verifyLegacyVipMigration() {
+        try (Connection conn = getConnection()) {
+            long legacyPlayers = count(conn, "SELECT COUNT(*) FROM easyvip_vips");
+            long migratedPlayers = count(conn, """
+                    SELECT COUNT(*) FROM easyvip_vips legacy
+                    WHERE EXISTS (SELECT 1 FROM easyvip_players v2 WHERE v2.player_uuid = legacy.player_uuid)
+                    """);
+            long migratedGrants = count(conn, "SELECT COUNT(*) FROM easyvip_entitlement_grants");
+            long legacyGrants = 0;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT vips_data FROM easyvip_vips")) {
+                while (rs.next()) {
+                    String json = rs.getString(1);
+                    if (json != null && !json.isBlank()) {
+                        Type type = new TypeToken<Map<String, PlayerVipRecord>>() {}.getType();
+                        Map<String, PlayerVipRecord> values = GSON.fromJson(json, type);
+                        if (values != null) legacyGrants += values.size();
+                    }
+                }
+            }
+            boolean complete = migratedPlayers >= legacyPlayers && migratedGrants >= legacyGrants;
+            return new MigrationVerification(legacyPlayers, migratedPlayers, legacyGrants, migratedGrants, complete);
+        } catch (SQLException | RuntimeException e) {
+            return new MigrationVerification(0, 0, 0, 0, false);
+        }
+    }
+
+    private static long count(Connection conn, String sql) throws SQLException {
+        try (Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            return rs.next() ? rs.getLong(1) : 0;
+        }
+    }
+
     private static void ensureUniqueIndex(Connection conn, String table, String indexName, String column) {
         try (ResultSet indexes = conn.getMetaData().getIndexInfo(null, null, table, true, false)) {
             while (indexes.next()) {
@@ -427,21 +469,28 @@ public final class SqlDatabaseManager {
              ResultSet rs = ps.executeQuery()) {
             conn.setAutoCommit(false);
             while (rs.next()) {
-                UUID uuid = UUID.fromString(rs.getString("player_uuid"));
-                long now = System.currentTimeMillis();
-                ensureV2Player(conn, uuid, rs.getString("player_name"), rs.getString("last_observed_active_vip"), now);
-                String json = rs.getString("vips_data");
-                if (json != null && !json.isBlank()) {
-                    Type type = new TypeToken<Map<String, PlayerVipRecord>>() {}.getType();
-                    Map<String, PlayerVipRecord> records = GSON.fromJson(json, type);
-                    if (records != null) {
-                        for (PlayerVipRecord record : records.values()) {
-                            insertLegacyGrant(conn, uuid, record, now);
+                Savepoint rowSavepoint = conn.setSavepoint();
+                String rawUuid = rs.getString("player_uuid");
+                try {
+                    UUID uuid = UUID.fromString(rawUuid);
+                    long now = System.currentTimeMillis();
+                    ensureV2Player(conn, uuid, rs.getString("player_name"), rs.getString("last_observed_active_vip"), now);
+                    String json = rs.getString("vips_data");
+                    if (json != null && !json.isBlank()) {
+                        Type type = new TypeToken<Map<String, PlayerVipRecord>>() {}.getType();
+                        Map<String, PlayerVipRecord> records = GSON.fromJson(json, type);
+                        if (records != null) {
+                            for (PlayerVipRecord record : records.values()) {
+                                insertLegacyGrant(conn, uuid, record, now);
+                            }
                         }
                     }
-                }
-                if (rs.getString("last_observed_active_vip") != null) {
-                    upsertPreference(conn, uuid, rs.getString("last_observed_active_vip"), now);
+                    if (rs.getString("last_observed_active_vip") != null) {
+                        upsertPreference(conn, uuid, rs.getString("last_observed_active_vip"), now);
+                    }
+                } catch (SQLException | RuntimeException rowError) {
+                    conn.rollback(rowSavepoint);
+                    System.err.println("[EasyVip-SQL] Legacy VIP row skipped for " + rawUuid + ": " + rowError.getMessage());
                 }
             }
             conn.commit();
