@@ -1,0 +1,8 @@
+{
+  "id": "easyvip-velocity",
+  "name": "EasyVip Velocity",
+  "version": "${version}",
+  "main": "br.com.pedrodalben.easyvip.velocity.EasyVipVelocityPlugin",
+  "authors": ["pedro-dalben"],
+  "description": "Network-wide EasyVip entitlement and capability adapter"
+}

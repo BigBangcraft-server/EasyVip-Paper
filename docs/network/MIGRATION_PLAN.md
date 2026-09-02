@@ -38,11 +38,13 @@ network foundation one bounded goal at a time.
 * Add ephemeral node heartbeat/visibility with no entitlement authority.
 * Keep SQL fallback safe when Redis is unavailable and expose asynchronous cold-cache reads.
 
-## GOAL 05 — delivery/Velocity
+## GOAL 05 — delivery/Velocity (implemented)
 
-* Add durable delivery ledger and lease/retry semantics.
-* Add Velocity adapter consuming the same API.
-* Make LuckPerms a namespaced projection with reconciliation.
+* Add durable SQL delivery ledger with explicit policies, unique idempotency,
+  owner leases, crash recovery, and at-least-once external-effect semantics.
+* Add `EasyVip-Velocity-1.2.0.jar` and generic `/easyvip`/`/vip` capability commands.
+* Make LuckPerms a namespaced projection with asynchronous Paper reconciliation.
+* Add a BedWars capability-only consumer fixture and adversarial ledger tests.
 
 ## GOAL 06 — hardening
 
@@ -52,8 +54,7 @@ network foundation one bounded goal at a time.
 
 ## Exit criteria for the next goal
 
-GOAL 03 is complete when the focused and full local suites are green and the
-API/core/bridge documentation is published. Do not call the network ready
-until the acceptance criteria in the program brief have authoritative
-concurrency, outage, and migration evidence. GOAL 04 starts only by explicit
-instruction.
+GOAL 05 is complete when the full Paper suite, ledger adversarial tests, and
+Velocity compilation/artifact gates are green. Do not call the network ready
+until GOAL 06 adds authoritative outage, security, operations, and production
+evidence across all acceptance criteria in the program brief.

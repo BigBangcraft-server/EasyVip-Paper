@@ -1,6 +1,6 @@
 # EasyVip Network Architecture
 
-Status: GOAL 04 Redis events/cache, Paper API `26.2.build.121-stable`, Java 25.
+Status: GOAL 05 delivery ledger, Velocity adapter, and projections; Paper API `26.2.build.121-stable`, Java 25.
 
 ## Audit of the current HEAD
 
@@ -36,6 +36,9 @@ Storage V2 transition on top of the Paper 26.2 upgrade.
 | `listener`, `command`, `paper` | Paper adapter lifecycle and UI | Bukkit/Paper |
 | `webstore` | HTTP sync and fulfillment ledger | HTTP, persistence, Bukkit via actions |
 | `redis` | Pub/Sub event transport and ephemeral node registry | Jedis; optional |
+| `delivery` | Durable claim/lease/complete contract | SQL-backed; at-least-once effects |
+| `projection` | Namespaced external permission projection | platform adapter; no authority |
+| `integration` | Reference capability consumers | API only |
 
 ### State and concurrency findings
 
@@ -59,6 +62,9 @@ Storage V2 transition on top of the Paper 26.2 upgrade.
 * `CachedEntitlementApi` fronts those views with bounded Caffeine TTL storage;
   `RedisEventBus` and `RedisNodeRegistry` are optional invalidation/visibility
   adapters and never authoritative state.
+* `SqlDeliveryLedger` uses unique idempotency keys and expiring node leases;
+  `EasyVip-Velocity` consumes the same API/core/storage artifact and exposes
+  generic capability commands.
 
 ### Dependency direction after this goal
 
@@ -72,13 +78,13 @@ behavior was moved in this foundation change.
                  easyvip-core
                     ^          ^
          easyvip-storage-sql  easyvip-messaging-redis
-                    ^
-       easyvip-paper       easyvip-velocity (future adapters)
+                    ^                    ^
+       easyvip-paper       easyvip-velocity
 ```
 
-The physical Gradle split is intentionally deferred until the contracts have a
-consumer and storage V2 is designed. This avoids a compatibility-only module
-shuffle while the existing plugin remains production-facing.
+The root project remains the compatibility build, with a separate `velocity`
+source set and `velocityJar` artifact. A full Gradle-project split is still
+deferred until the contracts have independent consumers and migration tests.
 
 ## Target state
 

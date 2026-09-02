@@ -2,6 +2,11 @@ package br.com.pedrodalben.easyvip.service;
 
 import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
+import br.com.pedrodalben.easyvip.delivery.DeliveryClaim;
+import br.com.pedrodalben.easyvip.delivery.DeliveryLedger;
+import br.com.pedrodalben.easyvip.delivery.DeliveryPolicy;
+import br.com.pedrodalben.easyvip.delivery.DeliveryRequest;
+import br.com.pedrodalben.easyvip.delivery.DeliveryStatus;
 import br.com.pedrodalben.easyvip.model.PendingVariantSelection;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
 import br.com.pedrodalben.easyvip.persistence.SqlDatabaseManager;
@@ -12,6 +17,7 @@ import java.util.*;
 import java.util.function.Consumer;
 
 public final class PackageService {
+    private static final DeliveryLedger DELIVERY_LEDGER = DeliveryLedger.sql();
 
     private PackageService() {
     }
@@ -164,10 +170,23 @@ public final class PackageService {
             return true;
         }
 
+        DeliveryClaim delivery = claimDelivery(uuid, packageId, claim.claimId());
+        if (delivery.delivered()) {
+            if (!SqlDatabaseManager.completePackageClaim(claim.claimId(), uuid, System.currentTimeMillis())) return false;
+            TextUtil.sendMessage(player, ActionExecutor.resolvePlaceholders(
+                    EasyVipConfig.messages.prefix + EasyVipConfig.messages.packageGiven, ctx));
+            return true;
+        }
+        if (!delivery.acquired()) return false;
+
         if (!ActionExecutor.execute(player, def.actions, ctx)) {
+            DELIVERY_LEDGER.fail(delivery.deliveryId(), uuid, EasyVipConfig.network.nodeId,
+                    "action_failed", java.time.Clock.systemUTC());
             SqlDatabaseManager.releasePackageClaim(claim.claimId(), uuid, "action_failed", System.currentTimeMillis());
             return false;
         }
+        if (!DELIVERY_LEDGER.complete(delivery.deliveryId(), uuid, EasyVipConfig.network.nodeId,
+                java.time.Clock.systemUTC())) return false;
         if (!SqlDatabaseManager.completePackageClaim(claim.claimId(), uuid, System.currentTimeMillis())) {
             return false;
         }
@@ -229,16 +248,33 @@ public final class PackageService {
         ctx.put("package_id", def.id);
         ctx.put("variant", variantName);
 
+        DeliveryClaim delivery = null;
+        if (PersistenceManager.isSqlMode() && match.getClaimId() != null) {
+            delivery = claimDelivery(uuid, packageId, match.getClaimId());
+            if (delivery.delivered()) {
+                if (!SqlDatabaseManager.completePackageClaim(match.getClaimId(), uuid, System.currentTimeMillis())) return false;
+                PersistenceManager.removePendingVariant(uuid, packageId);
+                return true;
+            }
+            if (!delivery.acquired()) return false;
+        }
+
         // Execute base actions + variant actions
         boolean ok = ActionExecutor.execute(player, def.actions, ctx);
         ok = ActionExecutor.execute(player, variantActions, ctx) && ok;
         if (!ok) {
+            if (delivery != null) {
+                DELIVERY_LEDGER.fail(delivery.deliveryId(), uuid, EasyVipConfig.network.nodeId,
+                        "action_failed", java.time.Clock.systemUTC());
+            }
             if (PersistenceManager.isSqlMode() && match.getClaimId() != null) {
                 SqlDatabaseManager.releasePackageClaim(match.getClaimId(), uuid, "action_failed", System.currentTimeMillis());
             }
             return false;
         }
 
+        if (delivery != null && !DELIVERY_LEDGER.complete(delivery.deliveryId(), uuid,
+                EasyVipConfig.network.nodeId, java.time.Clock.systemUTC())) return false;
         if (PersistenceManager.isSqlMode() && match.getClaimId() != null
                 && !SqlDatabaseManager.completePackageClaim(match.getClaimId(), uuid, System.currentTimeMillis())) {
             return false;
@@ -261,5 +297,11 @@ public final class PackageService {
         Map<String, Long> usage = PersistenceManager.getPackageUsage(uuid);
         usage.put(packageId, System.currentTimeMillis());
         PersistenceManager.updatePackageUsage(uuid, usage);
+    }
+
+    private static DeliveryClaim claimDelivery(UUID uuid, String packageId, String claimId) {
+        DeliveryRequest request = new DeliveryRequest(uuid, null, "package:" + packageId,
+                "NETWORK", "network", "package-delivery:" + claimId, DeliveryPolicy.ONCE);
+        return DELIVERY_LEDGER.claim(request, EasyVipConfig.network.nodeId, 60_000L, java.time.Clock.systemUTC());
     }
 }

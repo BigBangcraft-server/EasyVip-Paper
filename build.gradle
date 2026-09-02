@@ -12,6 +12,15 @@ java {
     }
 }
 
+sourceSets {
+    velocity {
+        java.setSrcDirs(['src/velocity/java'])
+        resources.setSrcDirs(['src/velocity/resources'])
+        compileClasspath += sourceSets.main.output + configurations.compileClasspath
+        runtimeClasspath += output + sourceSets.main.output + configurations.runtimeClasspath
+    }
+}
+
 repositories {
     mavenCentral()
     maven {
@@ -38,6 +47,9 @@ dependencies {
     implementation 'redis.clients:jedis:7.1.0'
     implementation 'com.github.ben-manes.caffeine:caffeine:3.2.4'
 
+    velocityCompileOnly 'com.velocitypowered:velocity-api:4.1.1-SNAPSHOT'
+    velocityAnnotationProcessor 'com.velocitypowered:velocity-api:4.1.1-SNAPSHOT'
+
     testImplementation 'io.papermc.paper:paper-api:26.2.build.121-stable'
     testImplementation 'net.luckperms:api:5.4'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
@@ -60,6 +72,20 @@ processResources {
     }
 }
 
+tasks.named('processVelocityResources') {
+    def props = [version: project.version]
+    inputs.properties props
+    filteringCharset = 'UTF-8'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    filesMatching('velocity-plugin.json') {
+        expand props
+    }
+}
+
+tasks.named('compileVelocityJava') {
+    options.encoding = 'UTF-8'
+}
+
 test {
     useJUnitPlatform()
 }
@@ -68,5 +94,25 @@ shadowJar {
     archiveClassifier.set('')
 }
 
+tasks.register('velocityJar', Jar) {
+    dependsOn tasks.named('jar'), tasks.named('shadowJar'), tasks.named('velocityClasses')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    archiveBaseName = 'EasyVip-Velocity'
+    archiveVersion = project.version
+    from({ zipTree(tasks.named('shadowJar').get().archiveFile) }) {
+        exclude 'plugin.yml', 'paper-plugin.yml'
+        exclude 'br/com/pedrodalben/easyvip/paper/**'
+        exclude 'br/com/pedrodalben/easyvip/command/**'
+        exclude 'br/com/pedrodalben/easyvip/listener/**'
+        exclude 'br/com/pedrodalben/easyvip/event/**'
+        exclude 'br/com/pedrodalben/easyvip/action/**'
+        exclude 'br/com/pedrodalben/easyvip/platform/**'
+        exclude 'br/com/pedrodalben/easyvip/service/**'
+        exclude 'br/com/pedrodalben/easyvip/network/NetworkEventListener*'
+        exclude 'br/com/pedrodalben/easyvip/webstore/WebStoreSyncService*'
+        exclude 'br/com/pedrodalben/easyvip/webstore/WebStoreFulfillmentService*'
+    }
+    from(sourceSets.velocity.output)
+}
 
-build.dependsOn shadowJar
+build.dependsOn shadowJar, velocityJar

@@ -1,6 +1,7 @@
 package br.com.pedrodalben.easyvip.listener;
 
 import br.com.pedrodalben.easyvip.command.EasyVipCommandHandler;
+import br.com.pedrodalben.easyvip.cache.CachedEntitlementApi;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import br.com.pedrodalben.easyvip.service.KeyService;
 import br.com.pedrodalben.easyvip.service.PackageService;
@@ -17,6 +18,11 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 
 public final class PlayerListener implements Listener {
+    private final CachedEntitlementApi api;
+
+    public PlayerListener(CachedEntitlementApi api) {
+        this.api = api;
+    }
 
     @EventHandler(priority = EventPriority.NORMAL)
     public void onPlayerJoin(PlayerJoinEvent event) {
@@ -24,6 +30,13 @@ public final class PlayerListener implements Listener {
 
         // 1. Process VIP expirations and pending activation actions
         VipService.handlePlayerJoin(player);
+
+        if (api != null) {
+            api.playerAsync(player.getUniqueId(), br.com.pedrodalben.easyvip.api.ScopeContext.network())
+                    .thenCompose(view -> br.com.pedrodalben.easyvip.platform.PermissionBridge.reconcileCapabilities(
+                            player.getUniqueId(), view.capabilities().keySet()))
+                    .exceptionally(error -> null);
+        }
 
         // 2. Notify player of any pending package variant selections
         PackageService.notifyPendingVariantsOnLogin(player);

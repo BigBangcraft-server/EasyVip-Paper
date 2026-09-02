@@ -19,8 +19,8 @@ Grant lifecycle:
 * `EXPIRED` is never effective after its end instant.
 * `REVOKED` is never effective, even if its dates are valid.
 
-The current Paper adapter reads the legacy persistence snapshot on demand.
-GOAL 04 may add version-aware caching and invalidation; it must not make Redis
+Paper and Velocity adapters read the legacy persistence snapshot through the
+version-aware local cache. Redis only invalidates snapshots; it must not become
 authoritative over SQL.
 
 ## Config example

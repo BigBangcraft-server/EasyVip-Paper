@@ -1,7 +1,7 @@
-# Threat Model — GOAL 02 Boundary
+# Threat Model — GOAL 05 Boundary
 
-This is the foundation audit, not a claim that distributed storage is already
-safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
+This is the foundation audit, not a production-readiness claim. Threats whose
+controls belong to GOAL 06 remain explicitly open.
 
 ## Assets
 
@@ -52,7 +52,8 @@ safe. Threats whose controls belong to GOAL 02+ remain explicitly open.
 * explicit node/proxy trust configuration and secret redaction;
 * outage tests proving fail-closed entitlement decisions and SQL authority.
 
-GOAL 04 keeps SQL as the authority. Redis payloads are bounded, versioned,
+GOAL 05 keeps SQL as the authority. Redis payloads are bounded, versioned,
 deduplicated, and used only for invalidation/visibility; Redis outage falls
-back to SQL plus TTL. Proxy, delivery, and production failover risks remain
-open for later goals.
+back to SQL plus TTL. Delivery leases/idempotency and the namespaced
+LuckPerms projection are added, while production failover, live proxy trust,
+and full operational audit remain GOAL 06 work.

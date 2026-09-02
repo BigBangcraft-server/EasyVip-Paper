@@ -4,8 +4,11 @@ import br.com.pedrodalben.easyvip.config.EasyVipConfig;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
+import br.com.pedrodalben.easyvip.projection.LuckPermsProjection;
 
+import java.util.Collection;
 import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 
 public final class PermissionBridge {
 
@@ -101,5 +104,14 @@ public final class PermissionBridge {
             return LuckPermsWrapper.createGroup(groupName);
         }
         return false;
+    }
+
+    public static CompletionStage<LuckPermsProjection.ProjectionResult> reconcileCapabilities(
+            UUID playerUuid, Collection<String> desiredCapabilities) {
+        if (!luckPermsPresent || !EasyVipConfig.integrations.luckpermsEnabled) {
+            return java.util.concurrent.CompletableFuture.completedFuture(
+                    new LuckPermsProjection.ProjectionResult(java.util.Set.of(), java.util.Set.of()));
+        }
+        return LuckPermsWrapper.reconcileManagedPermissions(playerUuid, desiredCapabilities);
     }
 }

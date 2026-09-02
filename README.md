@@ -1,6 +1,6 @@
 # EasyVip (Paper Edition)
 
-Modern, enterprise-grade VIP, Key, Reward, and Package management plugin built for **Paper / Purpur / Folia 26.2** (Java 25).
+Modern, enterprise-grade VIP, Key, Reward, and Package management platform built for **Paper / Purpur / Folia 26.2** and Velocity (Java 25).
 
 Fully backported from the EasyVip mod with 100% feature parity, zero mod dependencies, high performance, atomic persistence, and robust integrations.
 
@@ -43,6 +43,9 @@ Fully backported from the EasyVip mod with 100% feature parity, zero mod depende
   - **LuckPerms** API (v5.4) hooked for permission checks and automatic group inheritance.
   - **Vault** Economy API hooked for economy deposits and withdrawals.
   - **Folia** multi-threading and region scheduler support.
+  - **Velocity** adapter with the same API/core, generic capability commands, Redis invalidation, and SQL authority.
+  - **Durable delivery ledger** with idempotency keys and crash-recoverable leases for SQL package/key effects.
+  - **LuckPerms projection** under the `easyvip.managed.` namespace; unrelated nodes are preserved.
 
 ---
 
@@ -102,6 +105,7 @@ All configuration files are located under `plugins/EasyVip/`:
 - `reward_keys.toml` - Pre-configured reward keys and bundle definitions.
 - `pools.toml` - Weighted and unweighted random pools for script actions.
 - `integrations.toml` - Database (MySQL/SQLite/H2) and LuckPerms configuration.
+- `network.toml` - Optional Redis transport, node identity, cache bounds, and heartbeat interval.
 - `webstore.toml` - WebStore API endpoint, tokens, and sync behavior.
 - `fulfillment.toml` - WebStore asynchronous claim and HMAC-SHA256 validation rules.
 
@@ -122,6 +126,7 @@ The compiled, shaded jar ready for production will be generated in:
 ```
 build/libs/EasyVip-Paper-1.2.0.jar
 ```
+The proxy adapter is generated alongside it as `build/libs/EasyVip-Velocity-1.2.0.jar`.
 
 ---
 
@@ -132,4 +137,4 @@ Run the comprehensive unit and integration test suite:
 ./gradlew test
 ```
 
-Includes 95+ automated tests covering duration parsing, TOML serialization, SQL persistence staging, HMAC fulfillment, key security, cooldowns, variant selections, and command handling.
+Includes 120+ automated tests covering duration parsing, TOML serialization, SQL persistence staging, delivery idempotency/leases, capability projection, HMAC fulfillment, key security, cooldowns, variant selections, and command handling.

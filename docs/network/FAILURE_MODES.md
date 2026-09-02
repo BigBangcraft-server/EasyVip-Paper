@@ -1,4 +1,4 @@
-# GOAL 04 failure modes
+# GOAL 04-05 failure modes
 
 | Failure | Behavior | Safety property |
 | --- | --- | --- |
@@ -12,12 +12,18 @@
 | node crash | heartbeat hash expires | visibility is advisory only |
 | cache pressure | Caffeine evicts by bounded maximum | no unbounded player state |
 | Redis pool exhaustion | bounded wait fails the async operation | no blocked Minecraft main thread |
+| delivery duplicate request | SQL unique idempotency key returns existing state | one logical claim |
+| delivery lease expires | another node may reclaim and retry | crash recovery without a permanent lock |
+| delivery side effect is non-transactional | retry is at-least-once and requires downstream idempotency | no false exactly-once claim |
+| LuckPerms unavailable | projection future fails; EasyVip state is unchanged | authority is not delegated |
+| Velocity SQL/Redis failure | command returns unavailable/failure message | no capability is granted on dependency failure |
 
 Capability reads on a cold cache can use `playerAsync`; a caller must handle
 the failed future and choose its own fail-closed UI/gameplay behavior. No code
 grants a VIP because Redis, SQL, LuckPerms, or another dependency failed.
 
-GOAL 04 does not claim durable event replay. Pub/Sub is suitable for low-latency
-invalidation, while SQL reads and TTL provide convergence. A future Streams or
-outbox design belongs to delivery/event durability work and must preserve SQL
-authority.
+GOAL 04-05 do not claim durable event replay or transactional execution of
+arbitrary console commands. Pub/Sub is suitable for low-latency invalidation,
+the SQL ledger provides idempotent leases, and SQL reads/TTL provide
+convergence. Streams/outbox and provider-specific effect reconciliation belong
+to later hardening while preserving SQL authority.

@@ -1,6 +1,8 @@
 package br.com.pedrodalben.easyvip.persistence;
 
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
+import br.com.pedrodalben.easyvip.delivery.DeliveryRequest;
+import br.com.pedrodalben.easyvip.delivery.DeliveryStatus;
 import br.com.pedrodalben.easyvip.model.*;
 import br.com.pedrodalben.easyvip.webstore.model.FulfillmentRecord;
 import br.com.pedrodalben.easyvip.webstore.model.FulfillmentItemRecord;
@@ -203,6 +205,7 @@ public final class SqlDatabaseManager {
                     scope_type VARCHAR(32) NOT NULL,
                     scope_value VARCHAR(255) NOT NULL,
                     idempotency_key VARCHAR(255) NOT NULL,
+                    policy VARCHAR(32) NOT NULL DEFAULT 'ONCE',
                     status VARCHAR(32) NOT NULL,
                     claimed_by_node VARCHAR(255) DEFAULT NULL,
                     lease_expires_at BIGINT DEFAULT NULL,
@@ -293,6 +296,8 @@ public final class SqlDatabaseManager {
 
             // Schema migrations for existing databases
             ensureColumnExists(conn, "easyvip_keys", "consumed_instances_json", "MEDIUMTEXT");
+            ensureColumnExists(conn, "easyvip_deliveries", "policy", "VARCHAR(32) NOT NULL DEFAULT 'ONCE'");
+            recordMigration(conn, 2, "delivery-ledger-policy");
             ensureColumnExists(conn, "easyvip_package_claims", "claim_key", "VARCHAR(512) DEFAULT NULL");
             stmt.execute("UPDATE easyvip_package_claims SET claim_key = CONCAT('legacy:', claim_id) WHERE claim_key IS NULL OR claim_key = ''");
             ensureUniqueIndex(conn, "easyvip_package_claims", "ux_easyvip_package_claim_key", "claim_key");
@@ -1594,6 +1599,198 @@ public final class SqlDatabaseManager {
                 if (!rs.next()) return null;
                 long value = rs.getLong(1);
                 return rs.wasNull() ? null : value;
+            }
+        }
+    }
+
+    // ─── Durable Delivery Ledger ────────────────────────────
+
+    public record DeliveryClaimResult(DeliveryStatus status, String deliveryId, int attempts,
+                                      long leaseExpiresAt, String failureCode) {
+    }
+
+    /** Claims a delivery by durable idempotency key. Expired leases are recoverable by another node. */
+    public static DeliveryClaimResult claimDelivery(DeliveryRequest request, String nodeId,
+                                                     long now, long leaseMillis) {
+        if (request == null || nodeId == null || nodeId.isBlank() || leaseMillis < 1_000L) {
+            return new DeliveryClaimResult(DeliveryStatus.ERROR, null, 0, 0L, "invalid_request");
+        }
+        long leaseExpiresAt = now + leaseMillis;
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            DeliveryRow existing = findDelivery(conn, request.idempotencyKey(), false);
+            if (existing != null) {
+                existing = findDelivery(conn, request.idempotencyKey(), true);
+                if (!matches(existing, request)) {
+                    conn.rollback();
+                    return new DeliveryClaimResult(DeliveryStatus.ERROR, existing.deliveryId(), existing.attempts(),
+                            existing.leaseExpiresAt(), "idempotency_mismatch");
+                }
+                if ("DELIVERED".equals(existing.status())) {
+                    conn.commit();
+                    return deliveryResult(existing, DeliveryStatus.DELIVERED);
+                }
+                if ("CLAIMED".equals(existing.status()) && existing.leaseExpiresAt() >= now
+                        && !nodeId.equals(existing.claimedByNode())) {
+                    conn.commit();
+                    return deliveryResult(existing, DeliveryStatus.IN_PROGRESS);
+                }
+                if ("CLAIMED".equals(existing.status()) && existing.leaseExpiresAt() >= now
+                        && nodeId.equals(existing.claimedByNode())) {
+                    conn.commit();
+                    return deliveryResult(existing, DeliveryStatus.CLAIMED);
+                }
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        UPDATE easyvip_deliveries
+                        SET status = 'CLAIMED', claimed_by_node = ?, lease_expires_at = ?,
+                            attempts = attempts + 1, failure_code = NULL, delivered_at = NULL
+                        WHERE delivery_id = ?
+                        """)) {
+                    ps.setString(1, nodeId.trim());
+                    ps.setLong(2, leaseExpiresAt);
+                    ps.setString(3, existing.deliveryId());
+                    ps.executeUpdate();
+                }
+                conn.commit();
+                return new DeliveryClaimResult(DeliveryStatus.CLAIMED, existing.deliveryId(),
+                        existing.attempts() + 1, leaseExpiresAt, null);
+            }
+
+            String deliveryId = UUID.randomUUID().toString();
+            try (PreparedStatement ps = conn.prepareStatement("""
+                    INSERT INTO easyvip_deliveries
+                    (delivery_id, player_uuid, grant_id, benefit_id, scope_type, scope_value,
+                     idempotency_key, policy, status, claimed_by_node, lease_expires_at, attempts, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLAIMED', ?, ?, 1, ?)
+                    """)) {
+                ps.setString(1, deliveryId);
+                ps.setString(2, request.playerUuid().toString());
+                ps.setString(3, request.grantId());
+                ps.setString(4, request.benefitId());
+                ps.setString(5, request.scopeType());
+                ps.setString(6, request.scopeValue());
+                ps.setString(7, request.idempotencyKey());
+                ps.setString(8, request.policy().name());
+                ps.setString(9, nodeId.trim());
+                ps.setLong(10, leaseExpiresAt);
+                ps.setLong(11, now);
+                ps.executeUpdate();
+            }
+            conn.commit();
+            return new DeliveryClaimResult(DeliveryStatus.CLAIMED, deliveryId, 1, leaseExpiresAt, null);
+        } catch (SQLException e) {
+            if (isDuplicateKeyError(e)) {
+                try (Connection conn = getConnection()) {
+                    DeliveryRow winner = findDelivery(conn, request.idempotencyKey(), false);
+                    if (winner != null && matches(winner, request)) {
+                        DeliveryStatus status = "DELIVERED".equals(winner.status())
+                                ? DeliveryStatus.DELIVERED : DeliveryStatus.IN_PROGRESS;
+                        return deliveryResult(winner, status);
+                    }
+                } catch (SQLException ignored) {
+                }
+            }
+            System.err.println("[EasyVip-SQL] delivery claim failed: " + e.getSQLState());
+            return new DeliveryClaimResult(DeliveryStatus.ERROR, null, 0, 0L, "sql_error");
+        }
+    }
+
+    public static boolean completeDelivery(String deliveryId, UUID playerUuid, String nodeId, long now) {
+        if (deliveryId == null || playerUuid == null || nodeId == null || nodeId.isBlank()) return false;
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement("""
+                     UPDATE easyvip_deliveries
+                     SET status = 'DELIVERED', delivered_at = ?, lease_expires_at = NULL, failure_code = NULL
+                     WHERE delivery_id = ? AND player_uuid = ? AND status = 'CLAIMED'
+                       AND claimed_by_node = ? AND lease_expires_at >= ?
+                     """)) {
+            ps.setLong(1, now);
+            ps.setString(2, deliveryId);
+            ps.setString(3, playerUuid.toString());
+            ps.setString(4, nodeId.trim());
+            ps.setLong(5, now);
+            if (ps.executeUpdate() == 1) return true;
+            return deliveryStatus(conn, deliveryId) == DeliveryStatus.DELIVERED;
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    public static boolean failDelivery(String deliveryId, UUID playerUuid, String nodeId,
+                                       String failureCode, long now) {
+        if (deliveryId == null || playerUuid == null || nodeId == null || nodeId.isBlank()) return false;
+        String safeFailure = failureCode == null || failureCode.isBlank() ? "delivery_failed" : failureCode.trim();
+        if (safeFailure.length() > 80) safeFailure = safeFailure.substring(0, 80);
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement("""
+                     UPDATE easyvip_deliveries
+                     SET status = 'FAILED', failure_code = ?, delivered_at = NULL, lease_expires_at = NULL
+                     WHERE delivery_id = ? AND player_uuid = ? AND status = 'CLAIMED'
+                       AND claimed_by_node = ? AND lease_expires_at >= ?
+                     """)) {
+            ps.setString(1, safeFailure);
+            ps.setString(2, deliveryId);
+            ps.setString(3, playerUuid.toString());
+            ps.setString(4, nodeId.trim());
+            ps.setLong(5, now);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private static DeliveryStatus deliveryStatus(Connection conn, String deliveryId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT status FROM easyvip_deliveries WHERE delivery_id = ?")) {
+            ps.setString(1, deliveryId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return DeliveryStatus.ERROR;
+                return toDeliveryStatus(rs.getString(1));
+            }
+        }
+    }
+
+    private static DeliveryClaimResult deliveryResult(DeliveryRow row, DeliveryStatus status) {
+        return new DeliveryClaimResult(status, row.deliveryId(), row.attempts(), row.leaseExpiresAt(), row.failureCode());
+    }
+
+    private static DeliveryStatus toDeliveryStatus(String status) {
+        if ("DELIVERED".equals(status)) return DeliveryStatus.DELIVERED;
+        if ("CLAIMED".equals(status)) return DeliveryStatus.CLAIMED;
+        if ("FAILED".equals(status)) return DeliveryStatus.FAILED;
+        return DeliveryStatus.ERROR;
+    }
+
+    private static boolean matches(DeliveryRow row, DeliveryRequest request) {
+        return request.playerUuid().toString().equals(row.playerUuid())
+                && Objects.equals(request.grantId(), row.grantId())
+                && request.benefitId().equals(row.benefitId())
+                && request.scopeType().equals(row.scopeType())
+                && request.scopeValue().equals(row.scopeValue())
+                && request.policy().name().equals(row.policy());
+    }
+
+    private record DeliveryRow(String deliveryId, String playerUuid, String grantId, String benefitId,
+                               String scopeType, String scopeValue, String policy, String status, String claimedByNode,
+                               int attempts, long leaseExpiresAt, String failureCode) {
+    }
+
+    private static DeliveryRow findDelivery(Connection conn, String idempotencyKey, boolean forUpdate) throws SQLException {
+        String suffix = forUpdate ? " FOR UPDATE" : "";
+        try (PreparedStatement ps = conn.prepareStatement("""
+                SELECT delivery_id, player_uuid, grant_id, benefit_id, scope_type, scope_value, policy,
+                       status, claimed_by_node, attempts, lease_expires_at, failure_code
+                FROM easyvip_deliveries WHERE idempotency_key = ?
+                """ + suffix)) {
+            ps.setString(1, idempotencyKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return null;
+                long lease = rs.getLong("lease_expires_at");
+                if (rs.wasNull()) lease = 0L;
+                return new DeliveryRow(rs.getString("delivery_id"), rs.getString("player_uuid"),
+                        rs.getString("grant_id"), rs.getString("benefit_id"), rs.getString("scope_type"),
+                        rs.getString("scope_value"), rs.getString("policy"), rs.getString("status"),
+                        rs.getString("claimed_by_node"),
+                        rs.getInt("attempts"), lease, rs.getString("failure_code"));
             }
         }
     }

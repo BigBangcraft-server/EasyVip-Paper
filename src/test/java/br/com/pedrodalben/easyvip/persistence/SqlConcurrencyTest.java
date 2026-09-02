@@ -1,6 +1,11 @@
 package br.com.pedrodalben.easyvip.persistence;
 
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
+import br.com.pedrodalben.easyvip.delivery.DeliveryClaim;
+import br.com.pedrodalben.easyvip.delivery.DeliveryLedger;
+import br.com.pedrodalben.easyvip.delivery.DeliveryPolicy;
+import br.com.pedrodalben.easyvip.delivery.DeliveryRequest;
+import br.com.pedrodalben.easyvip.delivery.DeliveryStatus;
 import br.com.pedrodalben.easyvip.model.KeyRecord;
 import br.com.pedrodalben.easyvip.model.PlayerVipRecord;
 import br.com.pedrodalben.easyvip.model.PlayerVipRegistry;
@@ -12,6 +17,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.List;
 import java.util.UUID;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -195,6 +203,40 @@ class SqlConcurrencyTest {
         });
         assertEquals(1, transitions.stream().filter(Boolean::booleanValue).count());
         assertEquals(1, transitions.stream().filter(value -> !value).count());
+    }
+
+    @Test
+    void deliveryLedgerUsesDurableIdempotencyAndLeaseRecovery() throws Exception {
+        UUID player = UUID.randomUUID();
+        DeliveryRequest request = new DeliveryRequest(player, "grant-1", "kit.start",
+                "NETWORK", "network", "delivery-race-" + runId, DeliveryPolicy.ONCE_PER_GRANT);
+        DeliveryLedger ledger = DeliveryLedger.sql();
+        List<DeliveryClaim> claims = race(2, (start, index) -> {
+            start.await();
+            return ledger.claim(request, "node-" + index, 30_000L, Clock.systemUTC());
+        });
+        assertEquals(1, claims.stream().filter(DeliveryClaim::acquired).count());
+        assertEquals(1, claims.stream().filter(claim -> claim.status() == DeliveryStatus.IN_PROGRESS).count());
+
+        DeliveryClaim winner = claims.stream().filter(DeliveryClaim::acquired).findFirst().orElseThrow();
+        assertFalse(ledger.complete(winner.deliveryId(), player, "other-node", Clock.systemUTC()));
+        assertTrue(ledger.complete(winner.deliveryId(), player,
+                claims.get(0).acquired() ? "node-0" : "node-1", Clock.systemUTC()));
+        assertTrue(ledger.claim(request, "node-retry", 30_000L, Clock.systemUTC()).delivered());
+
+        DeliveryRequest recoverable = new DeliveryRequest(player, "grant-2", "kit.daily",
+                "GROUP", "lobby", "delivery-lease-" + runId, DeliveryPolicy.ONCE_PER_DAY);
+        Clock firstNow = Clock.fixed(Instant.ofEpochMilli(10_000L), ZoneOffset.UTC);
+        Clock afterLease = Clock.fixed(Instant.ofEpochMilli(12_001L), ZoneOffset.UTC);
+        DeliveryClaim initial = ledger.claim(recoverable, "node-a", 1_000L, firstNow);
+        DeliveryClaim recovered = ledger.claim(recoverable, "node-b", 1_000L, afterLease);
+        assertTrue(initial.acquired());
+        assertTrue(recovered.acquired());
+        assertEquals(2, recovered.attempts());
+        assertTrue(ledger.fail(recovered.deliveryId(), player, "node-b", "test_failure", afterLease));
+        DeliveryRequest mismatch = new DeliveryRequest(player, "grant-2", "kit.other",
+                "GROUP", "lobby", "delivery-lease-" + runId, DeliveryPolicy.ONCE_PER_DAY);
+        assertEquals(DeliveryStatus.ERROR, ledger.claim(mismatch, "node-c", 1_000L, afterLease).status());
     }
 
     private static <T> List<T> race(int workers, RaceTask<T> task) throws Exception {

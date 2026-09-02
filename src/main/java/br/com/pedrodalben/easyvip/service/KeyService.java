@@ -3,6 +3,10 @@ package br.com.pedrodalben.easyvip.service;
 import br.com.pedrodalben.easyvip.action.ActionContext;
 import br.com.pedrodalben.easyvip.action.ActionExecutor;
 import br.com.pedrodalben.easyvip.config.EasyVipConfig;
+import br.com.pedrodalben.easyvip.delivery.DeliveryClaim;
+import br.com.pedrodalben.easyvip.delivery.DeliveryLedger;
+import br.com.pedrodalben.easyvip.delivery.DeliveryPolicy;
+import br.com.pedrodalben.easyvip.delivery.DeliveryRequest;
 import br.com.pedrodalben.easyvip.model.KeyRecord;
 import br.com.pedrodalben.easyvip.persistence.PersistenceManager;
 import br.com.pedrodalben.easyvip.persistence.SqlDatabaseManager;
@@ -25,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 public final class KeyService {
+    private static final DeliveryLedger DELIVERY_LEDGER = DeliveryLedger.sql();
 
     private static final ConcurrentHashMap<UUID, PendingConfirmation> confirmations = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, Map<CommandThrottleType, Long>> commandCooldowns = new ConcurrentHashMap<>();
@@ -269,19 +274,29 @@ public final class KeyService {
         KeyRecord record = claim.record();
         if (record == null || claim.claimId() == null) return RedeemResult.ERROR;
 
+        DeliveryClaim delivery = claimDelivery(record, uuid, physicalInstanceId, claim.claimId(), consumesUse);
+        boolean alreadyDelivered = delivery.delivered();
+        if (!alreadyDelivered && !delivery.acquired()) return RedeemResult.ERROR;
+
         Map<String, String> ctx = new HashMap<>();
         ctx.put("player", playerName);
         ctx.put("player_uuid", uuid.toString());
-        boolean success;
-        try {
-            success = executeKeyReward(player, record, ctx);
-        } catch (RuntimeException e) {
-            success = false;
+        boolean success = alreadyDelivered;
+        if (!alreadyDelivered) {
+            try {
+                success = executeKeyReward(player, record, ctx);
+            } catch (RuntimeException e) {
+                success = false;
+            }
         }
         if (!success) {
+            DELIVERY_LEDGER.fail(delivery.deliveryId(), uuid, EasyVipConfig.network.nodeId,
+                    "action_failed", java.time.Clock.systemUTC());
             SqlDatabaseManager.releaseKeyClaim(claim.claimId(), "action_failed");
             return RedeemResult.ERROR;
         }
+        if (!alreadyDelivered && !DELIVERY_LEDGER.complete(delivery.deliveryId(), uuid, EasyVipConfig.network.nodeId,
+                java.time.Clock.systemUTC())) return RedeemResult.ERROR;
         if (!SqlDatabaseManager.completeKeyClaim(claim.claimId(), uuid, consumesUse, System.currentTimeMillis())) {
             return RedeemResult.ERROR;
         }
@@ -289,6 +304,17 @@ public final class KeyService {
         confirmations.remove(uuid);
         PersistenceManager.log(playerName, "redeem_key", "Redeemed key " + KeySecurity.describeKeyForLog(code));
         return RedeemResult.SUCCESS;
+    }
+
+    private static DeliveryClaim claimDelivery(KeyRecord record, UUID playerUuid, String physicalInstanceId,
+                                               String claimId, boolean consumesUse) {
+        String idempotency = consumesUse
+                ? "key-delivery:" + record.getCode() + ":" + playerUuid + ":" +
+                (physicalInstanceId == null ? "logical" : physicalInstanceId)
+                : "key-delivery:" + claimId;
+        DeliveryRequest request = new DeliveryRequest(playerUuid, null, "key:" + record.getCode(),
+                "NETWORK", "network", idempotency, DeliveryPolicy.ONCE);
+        return DELIVERY_LEDGER.claim(request, EasyVipConfig.network.nodeId, 60_000L, java.time.Clock.systemUTC());
     }
 
     private static RedeemResult mapClaimStatus(SqlDatabaseManager.KeyClaimStatus status) {
