@@ -27,7 +27,9 @@ configuration/programming error and is reported rather than silently coerced.
 
 Paper callers with a possible cold cache should use the adapter's
 `playerAsync` path; Velocity commands already do so. A warm `player` call is
-memory-only, while SQL-backed misses remain compatibility synchronous APIs.
+memory-only, while SQL-backed misses remain compatibility synchronous APIs for
+off-thread callers. Paper join/expiration flows use the bounded persistence
+executor and marshal Bukkit actions back to the player scheduler.
 
 The API version is `1.1`. Consumers should depend on capability names and
 typed accessors. They should not call `VipService`, inspect `PlayerVipRecord`,

@@ -22,13 +22,19 @@ import org.bukkit.Registry;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -559,11 +565,18 @@ public final class VipService {
     }
 
     public static void evaluateActiveVip(UUID uuid, PlayerVipRegistry registry) {
+        evaluateActiveVip(uuid, registry, null, null);
+    }
+
+    private static void evaluateActiveVip(UUID uuid, PlayerVipRegistry registry,
+                                           Player providedPlayer, String providedPlayerName) {
         if (registry == null) {
             return;
         }
 
-        Player player = getPlayerSafely(uuid);
+        Player player = providedPlayer != null ? providedPlayer : getPlayerSafely(uuid);
+        String playerName = providedPlayerName != null && !providedPlayerName.isBlank()
+                ? providedPlayerName : resolvePlayerName(uuid);
 
 
         PlayerVipRecord highestVip = null;
@@ -617,7 +630,7 @@ public final class VipService {
                 Map<String, String> ctx = new HashMap<>();
                 ctx.put("tier_id", lastObserved);
                 ctx.put("tier_display", oldDef != null ? oldDef.displayName : lastObserved);
-                ctx.put("player", resolvePlayerName(uuid));
+                ctx.put("player", playerName);
                 ctx.put("player_uuid", uuid.toString());
                 executeUnsetActiveActions(uuid, player, lastObserved, oldDef, ctx, "vip_deactivate_old");
             }
@@ -628,7 +641,7 @@ public final class VipService {
                     Map<String, String> ctx = new HashMap<>();
                     ctx.put("tier_id", desiredActiveVip);
                     ctx.put("tier_display", newDef.displayName);
-                    ctx.put("player", resolvePlayerName(uuid));
+                    ctx.put("player", playerName);
                     ctx.put("player_uuid", uuid.toString());
                     executeSetActiveActions(uuid, player, newDef, ctx, "vip_activate_new");
                 }
@@ -648,8 +661,50 @@ public final class VipService {
         return expiredCount;
     }
 
+    /**
+     * Runs the database portion of expiration off the server thread and marshals
+     * Bukkit actions back to the owning scheduler.
+     */
+    public static CompletionStage<Integer> expireAllDueVipsAsync(Plugin plugin) {
+        return PersistenceManager.getAllPlayerVipsAsync().thenCompose(snapshot -> {
+            Map<UUID, Player> onlinePlayers = runOnServerAndWait(plugin, null, () -> {
+                Map<UUID, Player> players = new HashMap<>();
+                for (Player online : Bukkit.getOnlinePlayers()) {
+                    players.put(online.getUniqueId(), online);
+                }
+                return players;
+            });
+            CompletableFuture<Integer> total = CompletableFuture.completedFuture(0);
+            for (Map.Entry<UUID, PlayerVipRegistry> entry : snapshot.entrySet()) {
+                UUID uuid = entry.getKey();
+                PlayerVipRegistry registry = entry.getValue();
+                total = total.thenCompose(count -> {
+                    Player online = onlinePlayers.get(uuid);
+                    String playerName = online != null && online.getName() != null
+                            ? online.getName()
+                            : (registry.getPlayerName() == null || registry.getPlayerName().isBlank()
+                            ? uuid.toString() : registry.getPlayerName());
+                    return expireDueVipsForRegistryAsync(plugin, uuid, playerName, online, registry)
+                            .thenApply(expired -> count + expired);
+                });
+            }
+            return total;
+        });
+    }
+
     public static int expireDueVipsForPlayer(UUID uuid) {
         return expireDueVipsForPlayer(uuid, resolvePlayerName(uuid), getPlayerSafely(uuid));
+    }
+
+    public static CompletionStage<Integer> expireDueVipsForPlayerAsync(Plugin plugin, UUID uuid,
+                                                                        String playerName, Player player) {
+        return PersistenceManager.getPlayerVipsAsync(uuid).thenCompose(registry -> {
+            if (registry == null) {
+                return CompletableFuture.completedFuture(0);
+            }
+            String effectiveName = playerName == null || playerName.isBlank() ? uuid.toString() : playerName;
+            return expireDueVipsForRegistryAsync(plugin, uuid, effectiveName, player, registry);
+        });
     }
 
     static int expireDueVipsForTest(UUID uuid, String playerName) {
@@ -658,6 +713,17 @@ public final class VipService {
 
     private static int expireDueVipsForPlayer(UUID uuid, String playerName, Player player) {
         PlayerVipRegistry registry = PersistenceManager.getPlayerVips(uuid);
+        return expireDueVipsForRegistry(null, uuid, playerName, player, registry);
+    }
+
+    private static CompletionStage<Integer> expireDueVipsForRegistryAsync(Plugin plugin, UUID uuid,
+                                                                           String playerName, Player player,
+                                                                           PlayerVipRegistry registry) {
+        return PersistenceManager.executeAsync(() -> expireDueVipsForRegistry(plugin, uuid, playerName, player, registry));
+    }
+
+    private static int expireDueVipsForRegistry(Plugin plugin, UUID uuid, String playerName,
+                                                Player player, PlayerVipRegistry registry) {
         if (registry == null || registry.getVips().isEmpty()) {
             return 0;
         }
@@ -692,10 +758,14 @@ public final class VipService {
                 if (!alreadyDelivered && tierDef != null) {
                     long originalDuration = record.getExpiryTime() == -1 ? -1 : (record.getExpiryTime() - record.getStartTime());
                     enrichVipContext(ctx, uuid, playerName, tierDef, originalDuration, record.getStartTime(), record.getExpiryTime());
-                    if (record.isActive()) {
-                        actionsOk &= executeUnsetActiveActions(uuid, player, record.getTierId(), tierDef, ctx, "vip_expire_unset_active");
-                    }
-                    actionsOk &= executeVipExpireFlow(uuid, player, playerName, tierDef, ctx, "vip_expire");
+                    Supplier<Boolean> actions = () -> {
+                        boolean result = true;
+                        if (record.isActive()) {
+                            result &= executeUnsetActiveActions(uuid, player, record.getTierId(), tierDef, ctx, "vip_expire_unset_active");
+                        }
+                        return result & executeVipExpireFlow(uuid, player, playerName, tierDef, ctx, "vip_expire");
+                    };
+                    actionsOk = plugin == null ? actions.get() : runOnServerAndWait(plugin, player, actions);
                 }
                 if (PersistenceManager.isSqlMode()) {
                     if (!actionsOk) {
@@ -719,12 +789,26 @@ public final class VipService {
 
                 PersistenceManager.log("System", "vip_expired", "VIP tier " + record.getTierId() + " expired for " + playerName);
 
-                fireEventSafely(new VipExpireEvent(uuid, playerName, record.getTierId()));
+                if (plugin == null) {
+                    fireEventSafely(new VipExpireEvent(uuid, playerName, record.getTierId()));
+                } else {
+                    runOnServerAndWait(plugin, player, () -> {
+                        fireEventSafely(new VipExpireEvent(uuid, playerName, record.getTierId()));
+                        return null;
+                    });
+                }
             }
         }
 
         if (changed) {
-            evaluateActiveVip(uuid, registry);
+            if (plugin == null) {
+                evaluateActiveVip(uuid, registry);
+            } else {
+                runOnServerAndWait(plugin, player, () -> {
+                    evaluateActiveVip(uuid, registry, player, playerName);
+                    return null;
+                });
+            }
             PersistenceManager.updatePlayerVips(uuid, registry);
         }
 
@@ -769,6 +853,138 @@ public final class VipService {
 
         evaluateActiveVip(uuid, registry);
         PersistenceManager.updatePlayerVips(uuid, registry);
+    }
+
+    /** Non-blocking join pipeline: SQL/file IO runs on the persistence executor. */
+    public static CompletionStage<Void> handlePlayerJoinAsync(Plugin plugin, Player player) {
+        if (plugin == null || player == null) {
+            handlePlayerJoin(player);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        UUID uuid = player.getUniqueId();
+        String playerName = player.getName();
+        return PersistenceManager.getPlayerVipsAsync(uuid).thenCompose(registry -> {
+            if (registry == null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            return expireDueVipsForRegistryAsync(plugin, uuid, playerName, player, registry)
+                    .thenCompose(ignored -> PersistenceManager.executeAsync(() -> {
+                        // Re-read after expiration so a concurrent node's CAS result is respected.
+                        PlayerVipRegistry latest = PersistenceManager.getPlayerVips(uuid);
+                        return latest == null ? registry : latest;
+                    }))
+                    .thenCompose(latest -> runOnServerAsync(plugin, player, () -> {
+                        processPendingJoinActions(uuid, playerName, player, latest);
+                        return latest;
+                    }))
+                    .thenCompose(latest -> PersistenceManager.updatePlayerVipsAsync(uuid, latest))
+                    .thenApply(ignored -> null);
+        });
+    }
+
+    private static void processPendingJoinActions(UUID uuid, String playerName, Player player,
+                                                   PlayerVipRegistry registry) {
+        registry.setPlayerName(playerName);
+        for (PlayerVipRecord record : registry.getVips().values()) {
+            if (!record.isPendingActivateActions()) {
+                continue;
+            }
+            EasyVipConfig.VipTierDefinition tierDef = EasyVipConfig.tiers.list.get(record.getTierId());
+            if (tierDef != null) {
+                long remaining = record.getExpiryTime() == -1 ? -1 : (record.getExpiryTime() - record.getStartTime());
+                Map<String, String> ctx = new HashMap<>();
+                ctx.put("tier_id", record.getTierId());
+                ctx.put("tier_display", tierDef.displayName);
+                ctx.put("duration", DurationParser.formatDuration(remaining));
+                ctx.put("player", playerName);
+                ctx.put("player_uuid", uuid.toString());
+                enrichVipContext(ctx, uuid, playerName, tierDef, remaining, record.getStartTime(), record.getExpiryTime());
+                executeVipActivationFlow(uuid, player, playerName, tierDef, ctx,
+                        "vip_pending_activate", tierDef.messages.activated);
+                broadcastVipActivation(playerName, tierDef.displayName);
+            }
+            record.setPendingActivateActions(false);
+        }
+        evaluateActiveVip(uuid, registry, player, playerName);
+    }
+
+    private static <T> CompletionStage<T> runOnServerAsync(Plugin plugin, Player player, Supplier<T> action) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        Runnable task = () -> {
+            try {
+                result.complete(action.get());
+            } catch (Throwable error) {
+                result.completeExceptionally(error);
+            }
+        };
+
+        if (plugin == null) {
+            task.run();
+            return result;
+        }
+
+        try {
+            if (Bukkit.isPrimaryThread()) {
+                task.run();
+                return result;
+            }
+        } catch (Throwable ignored) {
+            result.completeExceptionally(new IllegalStateException("Bukkit runtime is unavailable"));
+            return result;
+        }
+
+        if (!plugin.isEnabled()) {
+            result.completeExceptionally(new IllegalStateException("EasyVip plugin is disabled"));
+            return result;
+        }
+
+        boolean scheduled = false;
+        if (player != null) {
+            try {
+                Method schedulerMethod = player.getClass().getMethod("getScheduler");
+                Object entityScheduler = schedulerMethod.invoke(player);
+                Method runMethod = entityScheduler.getClass().getMethod("run", Plugin.class,
+                        java.util.function.Consumer.class, Runnable.class);
+                java.util.function.Consumer<Object> consumer = ignored -> task.run();
+                Runnable retired = () -> result.completeExceptionally(
+                        new IllegalStateException("Player scheduler retired"));
+                runMethod.invoke(entityScheduler, plugin, consumer, retired);
+                scheduled = true;
+            } catch (Throwable ignored) {
+                // Standard Paper uses the server scheduler; try it below.
+            }
+        }
+        if (!scheduled && player == null) {
+            try {
+                Method globalMethod = Bukkit.class.getMethod("getGlobalRegionScheduler");
+                Object globalScheduler = globalMethod.invoke(null);
+                Method runMethod = globalScheduler.getClass().getMethod("run", Plugin.class,
+                        java.util.function.Consumer.class);
+                java.util.function.Consumer<Object> consumer = ignored -> task.run();
+                runMethod.invoke(globalScheduler, plugin, consumer);
+                scheduled = true;
+            } catch (Throwable ignored) {
+                // Standard Paper uses the server scheduler below.
+            }
+        }
+        if (!scheduled) {
+            try {
+                Bukkit.getScheduler().runTask(plugin, task);
+                scheduled = true;
+            } catch (Throwable error) {
+                result.completeExceptionally(new IllegalStateException("Unable to schedule Bukkit work", error));
+            }
+        }
+        return result;
+    }
+
+    private static <T> T runOnServerAndWait(Plugin plugin, Player player, Supplier<T> action) {
+        try {
+            return runOnServerAsync(plugin, player, action).toCompletableFuture().get(30, TimeUnit.SECONDS);
+        } catch (Exception error) {
+            throw new IllegalStateException("Bukkit action could not be completed", error);
+        }
     }
 
     public static String resolvePlayerName(UUID uuid) {

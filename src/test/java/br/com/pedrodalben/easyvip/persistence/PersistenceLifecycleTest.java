@@ -6,7 +6,10 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class PersistenceLifecycleTest {
@@ -50,6 +53,24 @@ class PersistenceLifecycleTest {
             EasyVipConfig.integrations.sqlUrl = originalUrl;
             EasyVipConfig.integrations.sqlUsername = originalUsername;
             EasyVipConfig.integrations.sqlPassword = originalPassword;
+        }
+    }
+
+    @Test
+    void asynchronousPersistenceRunsOffCallerThread() throws Exception {
+        boolean originalSql = EasyVipConfig.integrations.sqlEnabled;
+        EasyVipConfig.integrations.sqlEnabled = false;
+        try {
+            PersistenceManager.initialize(tempDir);
+            String caller = Thread.currentThread().getName();
+            String worker = PersistenceManager.executeAsync(() -> Thread.currentThread().getName())
+                    .get(5, TimeUnit.SECONDS);
+            assertNotEquals(caller, worker);
+            assertNull(PersistenceManager.getPlayerVipsAsync(UUID.randomUUID())
+                    .get(5, TimeUnit.SECONDS));
+        } finally {
+            PersistenceManager.shutdown();
+            EasyVipConfig.integrations.sqlEnabled = originalSql;
         }
     }
 }

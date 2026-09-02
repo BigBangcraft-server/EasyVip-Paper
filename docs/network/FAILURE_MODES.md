@@ -16,6 +16,7 @@
 | delivery lease expires | another node may reclaim and retry | crash recovery without a permanent lock |
 | expiration worker crashes | delivery lease remains retryable before SQL lifecycle transition | no lost once-only expiry action |
 | pending-variant cleanup runs | SQL cleanup stays on the expiration worker, outside the server thread | no join/tick database wait |
+| player join/expiration persistence runs | bounded persistence executor performs SQL/file IO; Bukkit actions are marshalled to the player scheduler | no join/tick database wait |
 | delivery side effect is non-transactional | retry is at-least-once and requires downstream idempotency | no false exactly-once claim |
 | LuckPerms unavailable | projection future fails; EasyVip state is unchanged | authority is not delegated |
 | Velocity SQL/Redis failure | command returns unavailable/failure message | no capability is granted on dependency failure |

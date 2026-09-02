@@ -52,8 +52,9 @@ includes the Storage V2 transition and GOAL 06 hardening on Paper 26.2.
   optimistic version token; the legacy JSON row is mirrored for rollback.
 * SQL key and package claims use row locks, unique keys, and lease/status
   transitions. JVM locks remain only around legacy CRUD paths.
-* Expiration schedules on every Paper node, but the V2 conditional transition
-  elects one database winner before local lifecycle actions run.
+* Expiration schedules on every Paper node; persistence runs on a bounded
+  executor, Bukkit lifecycle actions are marshalled to the player/global
+  scheduler, and the V2 conditional transition elects one database winner.
 * Web-store fulfillment already has transactional staging/claim fields and
   HMAC/replay checks; it remains an adapter until storage V2.
 * `ConfiguredEntitlementService` resolves active `Grant` records into typed

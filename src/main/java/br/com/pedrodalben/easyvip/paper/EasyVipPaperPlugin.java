@@ -235,7 +235,7 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
         registerCommand("link", commandHandler);
 
         // 6. Register listeners
-        getServer().getPluginManager().registerEvents(new PlayerListener(cachedEntitlementApi), this);
+        getServer().getPluginManager().registerEvents(new PlayerListener(this, cachedEntitlementApi), this);
 
         // 7. Start background services
         ExpirationService.start(this);

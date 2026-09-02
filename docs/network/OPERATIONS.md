@@ -21,7 +21,7 @@ pool, cache, event, delivery, and reconciliation counters. Velocity provides
 
 Never paste diagnostics containing connection URLs or credentials into tickets.
 
-The public capability API and diagnostics use asynchronous executors. Legacy
-administrative mutations still run through the existing synchronous command
-path; schedule those from automation during low-traffic windows until the
-command adapter is fully asynchronous.
+The public capability API, join/expiration persistence, and diagnostics use
+bounded asynchronous executors. Legacy administrative mutations still run
+through the existing synchronous command path; schedule those from automation
+during low-traffic windows until the command adapter is fully asynchronous.

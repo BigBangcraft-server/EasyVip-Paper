@@ -44,7 +44,8 @@ controls belong to GOAL 06 remain explicitly open.
 * Redis payloads are untrusted transport data; Pub/Sub can duplicate, delay,
   reorder, or disappear during an outage.
 * Legacy synchronous admin mutations can still occupy a server thread during
-  SQL latency; full async command composition remains open.
+  SQL latency; full async command composition remains open. Join and expiration
+  persistence now use a bounded executor and scheduler-marshalled actions.
 
 ## Required mitigations before network use
 

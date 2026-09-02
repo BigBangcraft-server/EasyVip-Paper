@@ -14,6 +14,7 @@ import br.com.pedrodalben.easyvip.platform.TextUtil;
 import org.bukkit.entity.Player;
 
 import java.util.*;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 public final class PackageService {
@@ -48,6 +49,30 @@ public final class PackageService {
     public static void notifyPendingVariantsOnLogin(Player player) {
         if (player == null) return;
         notifyPendingVariantsOnLogin(player.getUniqueId(), player.getName(), msg -> TextUtil.sendMessage(player, msg));
+    }
+
+    /** Loads pending variants without performing SQL work on the Paper thread. */
+    public static CompletionStage<List<String>> pendingVariantMessagesAsync(UUID uuid) {
+        return PersistenceManager.executeAsync(() -> {
+            cleanupExpiredPendingVariants(uuid);
+            if (!EasyVipConfig.common.notifyPendingVariantOnLogin) {
+                return List.of();
+            }
+            List<String> messages = new ArrayList<>();
+            for (PendingVariantSelection selection : PersistenceManager.getPendingVariants(uuid)) {
+                if (selection.isExpired(EasyVipConfig.common.variantSelectionTimeoutSeconds)) {
+                    continue;
+                }
+                EasyVipConfig.PackageDefinition def = EasyVipConfig.packages.list.get(selection.getPackageId());
+                String pkgDisplay = def != null ? def.displayName : selection.getPackageId();
+                Map<String, String> ctx = new HashMap<>();
+                ctx.put("package", pkgDisplay);
+                ctx.put("package_id", selection.getPackageId());
+                messages.add(ActionExecutor.resolvePlaceholders(
+                        EasyVipConfig.messages.prefix + EasyVipConfig.messages.variantPending, ctx));
+            }
+            return List.copyOf(messages);
+        });
     }
 
     static void notifyPendingVariantsOnLogin(UUID uuid, String playerName, Consumer<String> messageSink) {

@@ -338,10 +338,26 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
             name = player.getName();
         }
 
-        PlayerVipRegistry registry = PersistenceManager.getPlayerVips(uuid);
+        if (plugin != null) {
+            PersistenceManager.getPlayerVipsAsync(uuid).whenComplete((registry, error) -> {
+                if (error != null) {
+                    sendNetworkMessage(sender, "§c" + EasyVipConfig.localized(
+                            "Unable to load VIP data.", "Não foi possível carregar os dados de VIP."));
+                    return;
+                }
+                runOnServer(() -> sendInfo(sender, name, registry));
+            });
+            return true;
+        }
+
+        sendInfo(sender, name, PersistenceManager.getPlayerVips(uuid));
+        return true;
+    }
+
+    private void sendInfo(CommandSender sender, String name, PlayerVipRegistry registry) {
         if (registry == null || registry.getVips().isEmpty()) {
             TextUtil.sendMessage(sender, "§7[EasyVip] " + name + " " + EasyVipConfig.localized("has no registered VIPs.", "não possui nenhum VIP registrado."));
-            return true;
+            return;
         }
 
         TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.vipTimeHeader, new HashMap<>()));
@@ -367,8 +383,6 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
                     : " §7[" + EasyVipConfig.localized("Inactive", "Inativo") + "]";
             TextUtil.sendMessage(sender, ActionExecutor.resolvePlaceholders(EasyVipConfig.messages.vipTimeLine, context) + status);
         }
-
-        return true;
     }
 
     private String formatTimeLeft(long diff) {
@@ -1096,10 +1110,22 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
     }
 
     private void sendNetworkMessage(CommandSender sender, String message) {
+        runOnServer(() -> TextUtil.sendMessage(sender, message));
+    }
+
+    private void runOnServer(Runnable task) {
+        if (plugin == null) {
+            task.run();
+            return;
+        }
         try {
-            Bukkit.getScheduler().runTask(plugin, () -> TextUtil.sendMessage(sender, message));
+            if (Bukkit.isPrimaryThread()) {
+                task.run();
+            } else {
+                Bukkit.getScheduler().runTask(plugin, task);
+            }
         } catch (IllegalStateException ignored) {
-            TextUtil.sendMessage(sender, message);
+            task.run();
         }
     }
 

@@ -14,16 +14,22 @@ import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 
 public final class PersistenceManager {
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static volatile ExecutorService executor = newExecutor();
+    private static volatile ExecutorService asyncExecutor = newAsyncExecutor();
 
     private static final ReentrantReadWriteLock LOCK = new ReentrantReadWriteLock();
     private static Path dataDir;
-    private static boolean sqlMode = false;
+    private static volatile boolean sqlMode = false;
 
     // Cache
     private static final Map<UUID, PlayerVipRegistry> vips = new HashMap<>();
@@ -42,6 +48,9 @@ public final class PersistenceManager {
     public static synchronized void initialize(Path dir) {
         if (executor.isShutdown()) {
             executor = newExecutor();
+        }
+        if (asyncExecutor.isShutdown()) {
+            asyncExecutor = newAsyncExecutor();
         }
         dataDir = dir.resolve("data");
 
@@ -88,6 +97,7 @@ public final class PersistenceManager {
             SqlDatabaseManager.shutdown();
             sqlMode = false;
             stopExecutor();
+            stopAsyncExecutor();
             dataDir = null;
             return;
         }
@@ -103,11 +113,25 @@ public final class PersistenceManager {
             LOCK.writeLock().unlock();
         }
         stopExecutor();
+        stopAsyncExecutor();
         dataDir = null;
     }
 
     private static void stopExecutor() {
         ExecutorService current = executor;
+        current.shutdown();
+        try {
+            if (!current.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                current.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            current.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void stopAsyncExecutor() {
+        ExecutorService current = asyncExecutor;
         current.shutdown();
         try {
             if (!current.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -133,6 +157,32 @@ public final class PersistenceManager {
             thread.setDaemon(true);
             return thread;
         });
+    }
+
+    private static ExecutorService newAsyncExecutor() {
+        return new ThreadPoolExecutor(4, 4, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(256), r -> {
+                    Thread thread = new Thread(r, "EasyVip-Persistence-Async-" + System.nanoTime());
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    /** Runs potentially blocking persistence work away from a Paper/Folia thread. */
+    public static <T> CompletableFuture<T> executeAsync(Supplier<T> operation) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            asyncExecutor.execute(() -> {
+                try {
+                    future.complete(operation.get());
+                } catch (Throwable error) {
+                    future.completeExceptionally(error);
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            future.completeExceptionally(new IllegalStateException("Persistence executor is saturated", rejected));
+        }
+        return future;
     }
 
     // ─── Load Operations ────────────────────────────────────
@@ -381,6 +431,10 @@ public final class PersistenceManager {
         }
     }
 
+    public static CompletableFuture<PlayerVipRegistry> getPlayerVipsAsync(UUID uuid) {
+        return executeAsync(() -> getPlayerVips(uuid));
+    }
+
     public static Map<UUID, PlayerVipRegistry> getAllPlayerVips() {
         if (sqlMode) {
             return SqlDatabaseManager.getAllPlayerVips();
@@ -397,6 +451,10 @@ public final class PersistenceManager {
         }
     }
 
+    public static CompletableFuture<Map<UUID, PlayerVipRegistry>> getAllPlayerVipsAsync() {
+        return executeAsync(PersistenceManager::getAllPlayerVips);
+    }
+
     public static void updatePlayerVips(UUID uuid, PlayerVipRegistry registry) {
         if (sqlMode) {
             SqlDatabaseManager.updatePlayerVips(uuid, registry);
@@ -409,6 +467,13 @@ public final class PersistenceManager {
             LOCK.writeLock().unlock();
         }
         saveVips();
+    }
+
+    public static CompletableFuture<Void> updatePlayerVipsAsync(UUID uuid, PlayerVipRegistry registry) {
+        return executeAsync(() -> {
+            updatePlayerVips(uuid, registry);
+            return null;
+        });
     }
 
     public static KeyRecord getKey(String code) {
