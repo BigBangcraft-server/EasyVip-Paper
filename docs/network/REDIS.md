@@ -26,6 +26,11 @@ On 2026-09-02, a disposable Redis 7.4 container was restarted and the
 integration suite passed before and after restart. Production ACL/TLS and
 failover drills remain deployment gates.
 
+On 2026-09-02, the same integration suite also passed over `rediss://` against
+a disposable Redis 7.4 instance using a generated CA. The TLS endpoint was
+restarted and the suite passed again; the CA and server key were temporary lab
+files, not production credentials.
+
 ## Node heartbeat
 
 `RedisNodeRegistry` stores an expiring hash per node and a sorted heartbeat

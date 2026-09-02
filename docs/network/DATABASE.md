@@ -27,3 +27,8 @@ required, in addition to the fast H2 suite. This is compatibility evidence, not
 a substitute for production failover drills. On 2026-09-02, disposable MySQL
 8.4 and MariaDB 11.4 containers were each restarted and the full
 `SqlConcurrencyTest` suite passed before and after restart.
+
+The same suite also passed against a disposable MySQL 8.4 server configured
+with a generated CA, `sslMode=VERIFY_IDENTITY`, and a JKS trust store; the
+server exposed `TLS_AES_128_GCM_SHA256` and passed again after restart. The CA,
+key, and trust store were temporary lab files and are not deployment secrets.

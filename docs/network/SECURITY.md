@@ -41,5 +41,5 @@ proxy/backend trust review, production failover exercises, and a production
 canary loader smoke test before the network can be called production-ready.
 A disposable Paper `26.2-121` loader smoke passed locally on 2026-09-02;
 it used JSON defaults and therefore does not prove production wiring.
-Disposable MySQL/MariaDB/Redis restart labs are recorded in the database and
-Redis runbooks.
+Disposable MySQL/MariaDB/Redis restart labs, including MySQL identity-verified
+TLS and Redis `rediss://`, are recorded in the database and Redis runbooks.
