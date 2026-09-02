@@ -25,7 +25,8 @@ import br.com.pedrodalben.easyvip.service.ExpirationService;
 import br.com.pedrodalben.easyvip.webstore.WebStoreFulfillmentService;
 import br.com.pedrodalben.easyvip.webstore.WebStoreSyncService;
 import org.bukkit.Bukkit;
-import org.bukkit.command.PluginCommand;
+import io.papermc.paper.command.brigadier.BasicCommand;
+import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
@@ -268,12 +269,28 @@ public final class EasyVipPaperPlugin extends JavaPlugin {
     }
 
     private void registerCommand(String name, EasyVipCommandHandler handler) {
-        PluginCommand cmd = getCommand(name);
-        if (cmd != null) {
-            cmd.setExecutor(handler);
-            cmd.setTabCompleter(handler);
-        } else {
-            getLogger().warning("Could not register command /" + name + " (missing in plugin.yml)");
+        // Paper plugins do not support YAML command declarations; use the native Brigadier bridge.
+        super.registerCommand(name, new PaperCommand(handler, name));
+    }
+
+    private static final class PaperCommand implements BasicCommand {
+        private final EasyVipCommandHandler handler;
+        private final String name;
+
+        private PaperCommand(EasyVipCommandHandler handler, String name) {
+            this.handler = handler;
+            this.name = name;
+        }
+
+        @Override
+        public void execute(CommandSourceStack source, String[] args) {
+            handler.executeCommand(source.getSender(), name, name, args);
+        }
+
+        @Override
+        public java.util.Collection<String> suggest(CommandSourceStack source, String[] args) {
+            java.util.List<String> suggestions = handler.completeCommand(source.getSender(), name, name, args);
+            return suggestions == null ? java.util.List.of() : suggestions;
         }
     }
 

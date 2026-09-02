@@ -13,3 +13,5 @@
   server ID, HTTPS, and the signed response fields. Never log or paste tokens.
 * **Paper 26.2 load failure**: confirm Java 25, `paper-plugin.yml` API `26.2`,
   and the Paper artifact rather than the Velocity artifact is installed.
+  Paper commands are registered through `JavaPlugin#registerCommand`; do not
+  reintroduce `getCommand`/YAML-only registration in the Paper entry point.

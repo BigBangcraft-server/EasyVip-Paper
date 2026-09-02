@@ -51,7 +51,13 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] rawArgs) {
-        String cmdName = command.getName().toLowerCase(Locale.ROOT);
+        return executeCommand(sender, command.getName(), label, rawArgs);
+    }
+
+    /** Shared command dispatch for Bukkit and Paper's BasicCommand registration APIs. */
+    public boolean executeCommand(@NotNull CommandSender sender, @NotNull String commandName,
+                                  @NotNull String label, @NotNull String[] rawArgs) {
+        String cmdName = commandName.toLowerCase(Locale.ROOT);
 
         if (cmdName.equals("usekey") || cmdName.equals("activate")) {
             if (!checkPermission(sender, "easyvip.use")) return true;
@@ -1486,7 +1492,13 @@ public final class EasyVipCommandHandler implements CommandExecutor, TabComplete
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, @NotNull String[] args) {
-        String cmdName = command.getName().toLowerCase(Locale.ROOT);
+        return completeCommand(sender, command.getName(), alias, args);
+    }
+
+    /** Shared tab completion for Bukkit and Paper's BasicCommand registration APIs. */
+    public @Nullable List<String> completeCommand(@NotNull CommandSender sender, @NotNull String commandName,
+                                                  @NotNull String alias, @NotNull String[] args) {
+        String cmdName = commandName.toLowerCase(Locale.ROOT);
         if (cmdName.equals("viptime")) {
             return filterMatches(onlinePlayerNames(), args.length > 0 ? args[0] : "");
         }
